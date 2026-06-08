@@ -1,0 +1,25 @@
+  --non-interactive is not supported, use $CI=1 instead
+Starting project at D:\get_creative-co\app_publishing_apps\existing-apps\Frenchie_Buddy_reactNative_app
+Starting Metro Bundler
+Waiting on http://localhost:8088
+Logs for your project will appear below.
+Web .\index.ts ▓▓▓▓░░░░░░░░░░░░ 26.0% (26/51)
+Web .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 80.2% (120/134)
+Web .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 89.8% (287/311)
+Web Bundled 12034ms index.ts (357 modules)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 66ms index.ts (1 module)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 44ms index.ts (1 module)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 55ms index.ts (1 module)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 106ms index.ts (1 module)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 62ms index.ts (1 module)
+ LOG  [web] Logs will appear in the browser console

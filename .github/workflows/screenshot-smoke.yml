@@ -1,0 +1,41 @@
+name: Screenshot smoke test
+# Bulletproof one-screenshot smoke test of the cloud-macOS pipeline (no local Mac).
+# Curls the EAS iOS simulator build artifact (.tar.gz), boots a sim, installs, launches Forge,
+# captures ONE screenshot, uploads it. Proves the GitHub-hosted runner end-to-end.
+# (Uses a direct artifact URL so the test isn't coupled to eas-cli auth/flags.)
+on:
+  workflow_dispatch:
+    inputs:
+      tarball_url:
+        description: "URL to the EAS iOS *simulator* build .tar.gz"
+        required: true
+        default: "https://expo.dev/artifacts/eas/dxSjHBAppKuK9ET4iqaFcw.tar.gz"
+
+jobs:
+  smoke:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Fetch + extract simulator build
+        run: |
+          curl -fSL "${{ inputs.tarball_url }}" -o app.tar.gz
+          mkdir -p app && tar -xzf app.tar.gz -C app
+          APP=$(find app -name '*.app' -maxdepth 4 -type d | head -1)
+          echo "APP=$APP" >> "$GITHUB_ENV"; echo "resolved APP=$APP"
+          [ -n "$APP" ] || { echo "ERROR: no .app in artifact"; exit 1; }
+      - name: Boot a simulator, install, launch, screenshot
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -m1 -E "iPhone 1[0-9]" | grep -oE '[0-9A-F-]{36}' || true)
+          [ -z "$UDID" ] && UDID=$(xcrun simctl list devices available | grep -m1 "iPhone" | grep -oE '[0-9A-F-]{36}')
+          echo "Using simulator: $UDID"
+          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" ai.apppublishing.forge || true
+          sleep 8
+          mkdir -p out
+          xcrun simctl io "$UDID" screenshot out/smoke.png
+          sips -g pixelWidth -g pixelHeight out/smoke.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshot
+          path: out/smoke.png

@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Frenchie Buddy",
+    "slug": "frenchie-buddy-heathersherry76",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "frenchiebuddy",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F7F1E8"
+    },
+    "ios": {
+      "bundleIdentifier": "com.heathersherry76.frenchiebuddy",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.heathersherry76.frenchiebuddy",
+      "adaptiveIcon": {
+        "backgroundColor": "#F7F1E8",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "owner": "amorriss-team",
+    "plugins": [
+      "expo-font",
+      "expo-secure-store"
+    ]
+  }
+}
