@@ -1,9 +1,23 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useState } from "react";
+import * as SplashScreen from "expo-splash-screen";
 import {
-  ActivityIndicator,
+  useFonts,
+  Fraunces_500Medium,
+  Fraunces_600SemiBold,
+  Fraunces_700Bold,
+} from "@expo-google-fonts/fraunces";
+import {
+  HankenGrotesk_400Regular,
+  HankenGrotesk_500Medium,
+  HankenGrotesk_600SemiBold,
+  HankenGrotesk_700Bold,
+} from "@expo-google-fonts/hanken-grotesk";
+import React, { useEffect, useRef, useState } from "react";
+import {
   Alert,
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -15,821 +29,663 @@ import {
 } from "react-native";
 import { HEALTH_DISCLAIMER, premiumBenefits } from "./src/data/templates";
 import { evaluateHeat, useFrenchieStore } from "./src/data/state";
-import { colors } from "./src/theme/colors";
-import type { LifeStage } from "./src/types";
+import { useTheme } from "./src/theme/theme";
+import type { LifeStage, SafetyLevel } from "./src/types";
+import { getPackages, purchasePackage, type OfferingPackages } from "./src/services/revenuecat";
 import {
-  getPackages,
-  purchasePackage,
-  type OfferingPackages,
-} from "./src/services/revenuecat";
-import {
-  Screen,
-  Gauge,
-  Stepper,
-  Metric,
-  Progress,
-  MoodCard,
   ActionButton,
   ActionPill,
-  SettingsRow,
-  Field,
+  ArcGauge,
+  Badge,
+  Card,
   EmptyState,
-  levelBorder,
-  styles,
-  onboard,
+  FadeIn,
+  Field,
+  GlassTabBar,
+  GradientHero,
+  Metric,
+  PressableScale,
+  Progress,
+  Screen,
+  ScreenSkeleton,
+  SectionHeader,
+  SegmentedControl,
+  SettingsRow,
+  Sparkbars,
+  Stepper,
+  zoneColor,
+  zoneDeep,
+  type IconName,
 } from "./src/components/ui";
+
+SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 // ── Legal URLs (replace with real customer URLs before release) ──
 const PRIVACY_URL = "https://frenchiebuddy.com/privacy";
 const TERMS_URL = "https://frenchiebuddy.com/terms";
 const SUPPORT_URL = "https://frenchiebuddy.com/support";
 
-// ── Types ──
 type Tab = "safety" | "pulse" | "health" | "journal" | "profile";
-type Sheet = "auth" | "health" | "memory" | "medication" | "mood" | "paywall" | null;
+type Sheet = "health" | "memory" | "medication" | "mood" | "paywall" | null;
+type Store = ReturnType<typeof useFrenchieStore>;
+type ScreenProps = { state: Store["state"]; actions: Store["actions"]; open: (s: Sheet) => void };
 
-type ScreenProps = {
-  state: ReturnType<typeof useFrenchieStore>["state"];
-  actions: ReturnType<typeof useFrenchieStore>["actions"];
-  open: (sheet: Sheet) => void;
-};
-
-// ── Tab config ──
-const tabs: { id: Tab; label: string; icon: React.ComponentProps<typeof Ionicons>["name"] }[] = [
+const tabs: { id: Tab; label: string; icon: IconName }[] = [
   { id: "safety", label: "Safety", icon: "speedometer-outline" },
   { id: "pulse", label: "Pulse", icon: "sparkles-outline" },
-  { id: "health", label: "Health", icon: "medical-outline" },
+  { id: "health", label: "Health", icon: "heart-outline" },
   { id: "journal", label: "Journal", icon: "book-outline" },
   { id: "profile", label: "Profile", icon: "person-circle-outline" },
 ];
 
+// Heat-index fill ratio for the gauge (brachycephalic-tuned thresholds).
+const heatFill = (tempF: number, humidity: number) => {
+  const risk = tempF + humidity * 0.32;
+  return Math.max(0, Math.min(1, (risk - 70) / (115 - 70)));
+};
+
 // ══════════════════════════════════════════════════════════════════
-// Onboarding flow
+// Launch overlay — branded splash hand-off
 // ══════════════════════════════════════════════════════════════════
-
-type OnboardingStep = "welcome" | "signup" | "signin";
-
-const ONBOARDING_FEATURES = [
-  { icon: "speedometer-outline" as const, title: "Heat Safety Meter", desc: "Know when it's too hot to walk before you step outside." },
-  { icon: "medical-outline" as const, title: "Breathing & Health Log", desc: "Track breathing effort, weight, sleep, and medications daily." },
-  { icon: "book-outline" as const, title: "Memory Journal", desc: "Capture milestones and favorite moments across every life stage." },
-  { icon: "sparkles-outline" as const, title: "Daily Pulse & Mood", desc: "Breed-specific care tips and mood tracking for your Frenchie." },
-];
-
-const OnboardingScreen = ({ actions }: { actions: ReturnType<typeof useFrenchieStore>["actions"] }) => {
-  const [step, setStep] = useState<OnboardingStep>("welcome");
-  const [name, setName] = useState("");
-  const [owner, setOwner] = useState("");
-  const [passcode, setPasscode] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const handleSignUp = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await actions.signUp(name, passcode, owner);
-      await actions.sync();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign up failed. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleSignIn = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await actions.signIn(name, passcode);
-      await actions.sync();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign in failed. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (step === "welcome") {
-    return (
-      <View style={styles.app}>
-        <StatusBar style="dark" />
-        <ScrollView
-          style={styles.screen}
-          contentContainerStyle={onboard.container}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={onboard.hero}>
-            <View style={onboard.logoCircle}>
-              <Ionicons name="paw" size={48} color={colors.primary} />
-            </View>
-            <Text style={onboard.appTitle}>Frenchie Buddy</Text>
-            <Text style={onboard.tagline}>
-              The care companion built for flat-faced breeds.
-            </Text>
-          </View>
-
-          {ONBOARDING_FEATURES.map((f) => (
-            <View key={f.title} style={onboard.featureRow}>
-              <View style={onboard.featureIcon}>
-                <Ionicons name={f.icon} size={22} color={colors.primary} />
-              </View>
-              <View style={onboard.featureText}>
-                <Text style={onboard.featureTitle}>{f.title}</Text>
-                <Text style={onboard.featureDesc}>{f.desc}</Text>
-              </View>
-            </View>
-          ))}
-
-          <View style={onboard.buttonGroup}>
-            <ActionButton
-              icon="paw-outline"
-              label="Create an account"
-              onPress={() => { setStep("signup"); setError(""); }}
-            />
-            <ActionButton
-              icon="log-in-outline"
-              label="I already have an account"
-              onPress={() => { setStep("signin"); setError(""); }}
-              secondary
-            />
-          </View>
-
-          <View style={styles.legalRow}>
-            <Pressable onPress={() => Linking.openURL(TERMS_URL)}>
-              <Text style={styles.legalLink}>Terms</Text>
-            </Pressable>
-            <Text style={styles.legalDot}> · </Text>
-            <Pressable onPress={() => Linking.openURL(PRIVACY_URL)}>
-              <Text style={styles.legalLink}>Privacy</Text>
-            </Pressable>
-          </View>
-        </ScrollView>
-      </View>
-    );
-  }
-
-  if (step === "signup") {
-    return (
-      <View style={styles.app}>
-        <StatusBar style="dark" />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          style={{ flex: 1 }}
-        >
-          <ScrollView
-            style={styles.screen}
-            contentContainerStyle={onboard.container}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Pressable onPress={() => setStep("welcome")} style={onboard.backButton}>
-              <Ionicons name="arrow-back" size={22} color={colors.primary} />
-              <Text style={onboard.backText}>Back</Text>
-            </Pressable>
-
-            <View style={onboard.logoCircle}>
-              <Ionicons name="paw" size={38} color={colors.primary} />
-            </View>
-            <Text style={onboard.formTitle}>Create your pup's profile</Text>
-            <Text style={onboard.formSubtitle}>
-              Give your Frenchie a name and secure it with a passcode.
-            </Text>
-
-            <Field label="Frenchie's name" value={name} onChangeText={setName} placeholder="Mochi" autoCapitalize="words" />
-            <Field label="Your name" value={owner} onChangeText={setOwner} placeholder="Heather" autoCapitalize="words" />
-            <Field label="Passcode" value={passcode} onChangeText={setPasscode} placeholder="6+ characters" secureTextEntry />
-
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            <ActionButton
-              icon="checkmark-circle-outline"
-              label={busy ? "Creating account..." : "Create account"}
-              onPress={handleSignUp}
-            />
-
-            <Pressable style={onboard.switchRow} onPress={() => { setStep("signin"); setError(""); }}>
-              <Text style={onboard.switchText}>Already have an account? </Text>
-              <Text style={onboard.switchLink}>Sign in</Text>
-            </Pressable>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </View>
-    );
-  }
-
-  // signin
+const LaunchOverlay = ({ done }: { done: boolean }) => {
+  const t = useTheme();
+  const fade = useRef(new Animated.Value(1)).current;
+  const scale = useRef(new Animated.Value(0.92)).current;
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    Animated.timing(scale, { toValue: 1, duration: 600, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [scale]);
+  useEffect(() => {
+    if (!done) return;
+    Animated.timing(fade, { toValue: 0, duration: 420, delay: 220, easing: Easing.inOut(Easing.ease), useNativeDriver: true }).start(() => setHidden(true));
+  }, [done, fade]);
+  if (hidden) return null;
   return (
-    <View style={styles.app}>
-      <StatusBar style="dark" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1 }}
-      >
-        <ScrollView
-          style={styles.screen}
-          contentContainerStyle={onboard.container}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Pressable onPress={() => setStep("welcome")} style={onboard.backButton}>
-            <Ionicons name="arrow-back" size={22} color={colors.primary} />
-            <Text style={onboard.backText}>Back</Text>
-          </Pressable>
-
-          <View style={onboard.logoCircle}>
-            <Ionicons name="paw" size={38} color={colors.primary} />
-          </View>
-          <Text style={onboard.formTitle}>Welcome back</Text>
-          <Text style={onboard.formSubtitle}>
-            Sign in with your Frenchie's name and passcode to restore your data.
-          </Text>
-
-          <Field label="Frenchie's name" value={name} onChangeText={setName} placeholder="Mochi" autoCapitalize="words" />
-          <Field label="Passcode" value={passcode} onChangeText={setPasscode} placeholder="6+ characters" secureTextEntry />
-
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-          <ActionButton
-            icon="log-in-outline"
-            label={busy ? "Signing in..." : "Sign in"}
-            onPress={handleSignIn}
-          />
-
-          <Pressable style={onboard.switchRow} onPress={() => { setStep("signup"); setError(""); }}>
-            <Text style={onboard.switchText}>Don't have an account? </Text>
-            <Text style={onboard.switchLink}>Create one</Text>
-          </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </View>
+    <Animated.View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: t.color.bg, opacity: fade, zIndex: 100 }}>
+      <Animated.View style={{ alignItems: "center", transform: [{ scale }] }}>
+        <View style={{ width: 104, height: 104, borderRadius: 52, alignItems: "center", justifyContent: "center", backgroundColor: t.color.primarySubtle, ...t.elevation.md }}>
+          <Ionicons name="paw" size={52} color={t.color.primaryDeep} />
+        </View>
+        <Text style={{ fontFamily: t.font.displayBold, fontSize: 30, color: t.color.text, marginTop: 18 }}>Frenchie Buddy</Text>
+        <Text style={{ fontFamily: t.font.body, fontSize: 14, color: t.color.textSecondary, marginTop: 4 }}>Safe Breathing, Daily Joy</Text>
+      </Animated.View>
+    </Animated.View>
   );
 };
 
 // ══════════════════════════════════════════════════════════════════
 // Root
 // ══════════════════════════════════════════════════════════════════
-
 export default function App() {
+  const t = useTheme();
+  const [fontsLoaded] = useFonts({
+    Fraunces_500Medium, Fraunces_600SemiBold, Fraunces_700Bold,
+    HankenGrotesk_400Regular, HankenGrotesk_500Medium, HankenGrotesk_600SemiBold, HankenGrotesk_700Bold,
+  });
   const { state, ready, actions } = useFrenchieStore();
   const [tab, setTab] = useState<Tab>("safety");
   const [sheet, setSheet] = useState<Sheet>(null);
+  const booted = fontsLoaded && ready;
 
   useEffect(() => {
     const timer = setInterval(actions.tickWalk, 1000);
     return () => clearInterval(timer);
   }, [actions.tickWalk]);
 
-  if (!ready) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.primary} />
-        <Text style={styles.loadingText}>Opening Frenchie Buddy...</Text>
-      </View>
-    );
-  }
+  useEffect(() => {
+    if (booted) SplashScreen.hideAsync().catch(() => undefined);
+  }, [booted]);
 
-  // ── Auth gate: show onboarding if no account ──
-  if (!state.account) {
-    return <OnboardingScreen actions={actions} />;
-  }
-
-  const latestHeat = state.heatReadings[0];
-  const latestMood = state.moodScans[0];
+  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: t.color.bg }} />;
 
   return (
-    <View style={styles.app}>
-      <StatusBar style="dark" />
-      <View style={styles.shell}>
-        {tab === "safety" && <SafetyScreen open={setSheet} state={state} actions={actions} />}
-        {tab === "pulse" && <PulseScreen open={setSheet} state={state} actions={actions} />}
-        {tab === "health" && <HealthScreen open={setSheet} state={state} actions={actions} />}
-        {tab === "journal" && <JournalScreen open={setSheet} state={state} />}
-        {tab === "profile" && <ProfileScreen open={setSheet} state={state} actions={actions} />}
-      </View>
-      <View style={styles.tabBar}>
-        {tabs.map((item) => (
-          <Pressable
-            key={item.id}
-            onPress={() => setTab(item.id)}
-            style={[styles.tabButton, tab === item.id && styles.tabButtonActive]}
-          >
-            <Ionicons name={item.icon} size={21} color={tab === item.id ? colors.primary : colors.inkMuted} />
-            <Text style={[styles.tabLabel, tab === item.id && styles.tabLabelActive]}>{item.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={() => setSheet(null)}>
-        <Pressable style={styles.modalShade} onPress={() => setSheet(null)}>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.sheetWrap}>
-            <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-              <View style={styles.sheetHeader}>
-                <View style={styles.sheetHandle} />
-                <Pressable style={styles.sheetClose} onPress={() => setSheet(null)} hitSlop={12}>
-                  <Ionicons name="close" size={22} color={colors.primary} />
-                </Pressable>
-              </View>
-              <ScrollView
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-                contentContainerStyle={styles.sheetScrollContent}
-              >
-                {sheet === "auth" && <AuthSheet close={() => setSheet(null)} actions={actions} signedIn={!!state.account} />}
-                {sheet === "health" && <HealthSheet close={() => setSheet(null)} actions={actions} weight={state.profile.weightLbs} />}
-                {sheet === "memory" && <MemorySheet close={() => setSheet(null)} actions={actions} />}
-                {sheet === "medication" && <MedicationSheet close={() => setSheet(null)} actions={actions} />}
-                {sheet === "mood" && <MoodSheet close={() => setSheet(null)} actions={actions} isPremium={state.profile.subscriptionStatus !== "free"} />}
-                {sheet === "paywall" && <PaywallSheet close={() => setSheet(null)} actions={actions} />}
-              </ScrollView>
-            </Pressable>
-          </KeyboardAvoidingView>
-        </Pressable>
-      </Modal>
-      <View pointerEvents="none" style={styles.floatingStatus}>
-        <Text style={styles.floatingText}>
-          {latestHeat.level} outside | {latestMood.moodTitle}
-        </Text>
-      </View>
+    <View style={{ flex: 1, backgroundColor: t.color.bg }}>
+      <StatusBar style={t.scheme === "dark" ? "light" : "dark"} />
+      {!ready ? (
+        <ScreenSkeleton />
+      ) : !state.account ? (
+        <OnboardingScreen actions={actions} />
+      ) : (
+        <>
+          <View style={{ flex: 1 }}>
+            {tab === "safety" && <SafetyScreen open={setSheet} state={state} actions={actions} />}
+            {tab === "pulse" && <PulseScreen open={setSheet} state={state} actions={actions} />}
+            {tab === "health" && <HealthScreen open={setSheet} state={state} actions={actions} />}
+            {tab === "journal" && <JournalScreen open={setSheet} state={state} actions={actions} />}
+            {tab === "profile" && <ProfileScreen open={setSheet} state={state} actions={actions} />}
+          </View>
+          <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 26, backgroundColor: t.color.bg }} />
+          <GlassTabBar>
+            {tabs.map((item) => {
+              const active = tab === item.id;
+              return (
+                <PressableScale key={item.id} onPress={() => setTab(item.id)} accessibilityLabel={item.label}
+                  style={{ flex: 1, minHeight: 54, borderRadius: t.radius.lg, alignItems: "center", justifyContent: "center", gap: 3, backgroundColor: active ? t.color.primarySubtle : "transparent" }}>
+                  <Ionicons name={item.icon} size={21} color={active ? t.color.primaryDeep : t.color.textTertiary} />
+                  <Text style={{ fontFamily: t.font.bodyBold, fontSize: 10, color: active ? t.color.primaryDeep : t.color.textTertiary }}>{item.label}</Text>
+                </PressableScale>
+              );
+            })}
+          </GlassTabBar>
+          <SheetHost sheet={sheet} setSheet={setSheet} state={state} actions={actions} />
+        </>
+      )}
+      <LaunchOverlay done={booted} />
     </View>
   );
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Screens
+// Onboarding
 // ══════════════════════════════════════════════════════════════════
+const ONBOARDING_FEATURES: { icon: IconName; title: string; desc: string }[] = [
+  { icon: "speedometer-outline", title: "Heat Safety Meter", desc: "Know when it's too hot to walk before you step outside." },
+  { icon: "heart-outline", title: "Breathing & Health Log", desc: "Track breathing effort, weight, sleep, and medications daily." },
+  { icon: "book-outline", title: "Memory Journal", desc: "Capture milestones across every life stage." },
+  { icon: "sparkles-outline", title: "Daily Pulse", desc: "Breed-specific care tips and a mood log for your Frenchie." },
+];
 
-const SafetyScreen = ({ state, actions, open }: ScreenProps) => {
-  const [temperature, setTemperature] = useState(state.heatReadings[0]?.temperatureF ?? 76);
-  const [humidity, setHumidity] = useState(state.heatReadings[0]?.humidity ?? 58);
-  const [saved, setSaved] = useState(false);
-  const latest = state.heatReadings[0];
-  const preview = evaluateHeat(temperature, humidity);
-  const walkMinutes = Math.floor(state.walkTimer.seconds / 60);
-  const walkSeconds = String(state.walkTimer.seconds % 60).padStart(2, "0");
-
-  const handleSaveReading = () => {
-    actions.setHeat(temperature, humidity);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  return (
-    <Screen title="Safe Breathing" subtitle={`${state.profile.name}'s outdoor decision center`}>
-      <View style={[styles.heroBand, levelBorder(latest.level)]}>
-        <View style={styles.heroHeader}>
-          <View>
-            <Text style={styles.kicker}>Heat Safety Meter</Text>
-            <Text style={styles.heroTitle}>{latest.level}</Text>
-          </View>
-          <Gauge level={latest.level} />
-        </View>
-        <Text style={styles.heroCopy}>{latest.conditionLabel}</Text>
-        <View style={styles.metricRow}>
-          <Metric label="Temp" value={`${Math.round(latest.temperatureF)} F`} />
-          <Metric label="Humidity" value={`${Math.round(latest.humidity)}%`} />
-          <Metric label="Breathing" value={`${Math.round(state.healthEntries[0].breathingEffort * 100)}%`} />
-        </View>
-      </View>
-
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Adjust conditions</Text>
-        <Text style={styles.sectionMeta}>{preview.level}</Text>
-      </View>
-      <Stepper label="Temperature" value={temperature} suffix=" F" min={35} max={110} onChange={setTemperature} />
-      <Stepper label="Humidity" value={humidity} suffix="%" min={0} max={100} onChange={setHumidity} />
-      <ActionButton icon={saved ? "checkmark-outline" : "save-outline"} label={saved ? "Saved!" : "Save reading"} onPress={handleSaveReading} />
-
-      <View style={styles.twoCol}>
-        <View style={styles.panel}>
-          <Text style={styles.panelTitle}>Walk timer</Text>
-          <Text style={styles.timerText}>{walkMinutes}:{walkSeconds}</Text>
-          <ActionButton
-            icon={state.walkTimer.active ? "pause-outline" : "play-outline"}
-            label={state.walkTimer.active ? "Stop walk" : "Start walk"}
-            onPress={state.walkTimer.active ? actions.stopWalk : actions.startWalk}
-            compact
-          />
-        </View>
-        <View style={styles.panel}>
-          <Text style={styles.panelTitle}>Current mood</Text>
-          <Text style={styles.largeValue}>{state.moodScans[0].moodTitle}</Text>
-          <ActionButton icon="camera-outline" label="Scan" onPress={() => open("mood")} compact />
-        </View>
-      </View>
-    </Screen>
-  );
-};
-
-const PulseScreen = ({ state, actions, open }: ScreenProps) => (
-  <Screen title="Daily Pulse" subtitle="Playful care notes for today">
-    <View style={styles.pulseCard}>
-      <Text style={styles.kicker}>Star sign</Text>
-      <Text style={styles.bigHeadline}>{state.horoscope.starSign}</Text>
-      <Text style={styles.cardTitle}>{state.horoscope.title}</Text>
-      <Text style={styles.bodyText}>{state.horoscope.body}</Text>
-      <View style={styles.tipBox}>
-        <Ionicons name="bulb-outline" size={18} color={colors.primary} />
-        <Text style={styles.tipText}>{state.horoscope.tip}</Text>
-      </View>
-      <View style={styles.buttonRow}>
-        <ActionButton icon="refresh-outline" label="New reading" onPress={actions.refreshHoroscope} compact />
-        <ActionButton icon="share-outline" label="Share card" onPress={() => undefined} compact secondary />
-      </View>
-    </View>
-
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>Mood tracker</Text>
-      <Text style={styles.sectionMeta}>{state.moodScans.length} scans</Text>
-    </View>
-    <MoodCard mood={state.moodScans[0]} />
-    <ActionButton icon="camera-outline" label="Run mood scan" onPress={() => open("mood")} />
-    {state.profile.subscriptionStatus === "free" && (
-      <Pressable style={styles.lockedPanel} onPress={() => open("paywall")}>
-        <Ionicons name="lock-closed-outline" size={22} color={colors.primary} />
-        <Text style={styles.lockedText}>Mood history is a premium feature. Start your 7-day trial.</Text>
-      </Pressable>
-    )}
-  </Screen>
-);
-
-const HealthScreen = ({ state, actions, open }: ScreenProps) => {
-  const latest = state.healthEntries[0];
-  const trend = state.healthEntries.slice(0, 5).reverse();
-  return (
-    <Screen title="Health Log" subtitle="Breathing, snoring, sleep, and meds">
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Today</Text>
-        <ActionPill label="Add check-in" icon="add" onPress={() => open("health")} />
-      </View>
-      <View style={styles.panel}>
-        <Metric label="Breathing effort" value={`${Math.round(latest.breathingEffort * 100)}%`} />
-        <Progress value={latest.breathingEffort} level={latest.breathingEffort > 0.66 ? "Danger" : latest.breathingEffort > 0.45 ? "Caution" : "Safe"} />
-        <Text style={styles.bodyText}>{latest.note}</Text>
-      </View>
-
-      <Text style={styles.sectionTitle}>Weight trend</Text>
-      {trend.length === 0 ? (
-        <EmptyState icon="analytics-outline" message="No weight data yet. Add a check-in to start tracking." />
-      ) : (
-        <View style={styles.chart}>
-          {trend.map((entry) => (
-            <View key={entry.id} style={styles.chartBarWrap}>
-              <View style={[styles.chartBar, { height: 34 + (entry.weightLbs - 20) * 8 }]} />
-              <Text style={styles.chartLabel}>{entry.weightLbs.toFixed(1)}</Text>
-            </View>
-          ))}
-        </View>
-      )}
-
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Medication reminders</Text>
-        <ActionPill label="Add" icon="add" onPress={() => open("medication")} />
-      </View>
-      {state.medications.length === 0 ? (
-        <EmptyState icon="medical-outline" message='No medications yet. Tap "Add" to track supplements or meds.' />
-      ) : (
-        state.medications.map((med) => (
-          <Pressable key={med.id} style={styles.listRow} onPress={() => actions.toggleMedication(med.id)}>
-            <Ionicons name={med.givenToday ? "checkmark-circle" : "ellipse-outline"} size={24} color={med.givenToday ? colors.success : colors.inkMuted} />
-            <View style={styles.rowText}>
-              <Text style={styles.rowTitle}>{med.name}</Text>
-              <Text style={styles.rowSub}>{med.dosage} | {med.schedule}</Text>
-            </View>
-          </Pressable>
-        ))
-      )}
-      <Text style={styles.disclaimer}>{HEALTH_DISCLAIMER}</Text>
-    </Screen>
-  );
-};
-
-const JournalScreen = ({ state, open }: Omit<ScreenProps, "actions">) => {
-  const [stage, setStage] = useState<LifeStage | "All">("All");
-  const filtered = stage === "All" ? state.memories : state.memories.filter((memory) => memory.stage === stage);
-  return (
-    <Screen title="Memory Journal" subtitle="Milestones, tiny wins, and favorite days">
-      <View style={styles.segmented}>
-        {(["All", "Puppyhood", "Adult", "Senior"] as const).map((item) => (
-          <Pressable key={item} style={[styles.segment, stage === item && styles.segmentActive]} onPress={() => setStage(item)}>
-            <Text style={[styles.segmentText, stage === item && styles.segmentTextActive]}>{item}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <ActionButton icon="add-circle-outline" label="Add memory" onPress={() => open("memory")} />
-      {filtered.length === 0 ? (
-        <EmptyState
-          icon="book-outline"
-          message={stage === "All" ? "No memories yet. Tap above to capture a moment." : `No ${stage.toLowerCase()} memories yet.`}
-        />
-      ) : (
-        filtered.map((memory) => (
-          <View key={memory.id} style={styles.memoryCard}>
-            <View style={[styles.memoryArt, { backgroundColor: "#" + memory.colorHex.toString(16).padStart(6, "0") }]}>
-              <Ionicons name="image-outline" size={26} color={colors.inkOnDark} />
-            </View>
-            <View style={styles.memoryBody}>
-              <Text style={styles.rowTitle}>{memory.caption}</Text>
-              <Text style={styles.rowSub}>{memory.stage} | {new Date(memory.date).toLocaleDateString()}</Text>
-              {memory.milestone ? <Text style={styles.badge}>{memory.milestone}</Text> : null}
-            </View>
-          </View>
-        ))
-      )}
-    </Screen>
-  );
-};
-
-const ProfileScreen = ({ state, actions, open }: ScreenProps) => {
-  const [deleting, setDeleting] = useState(false);
-  const [restoring, setRestoring] = useState(false);
-
-  const handleDeleteAccount = () => {
-    if (!state.account) return;
-    Alert.alert(
-      "Delete account?",
-      "This will permanently remove your Frenchie's cloud data. This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            setDeleting(true);
-            try {
-              await actions.deleteAccount();
-            } catch (err) {
-              Alert.alert("Error", err instanceof Error ? err.message : "Delete failed. Please try again.");
-            } finally {
-              setDeleting(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const handleRestore = async () => {
-    setRestoring(true);
-    try {
-      const isPremium = await actions.restorePurchases();
-      Alert.alert(
-        isPremium ? "Restored" : "No purchases found",
-        isPremium ? "Premium access has been restored." : "We couldn't find any previous purchases for this account.",
-      );
-    } catch {
-      Alert.alert("Error", "Restore failed. Please try again.");
-    } finally {
-      setRestoring(false);
-    }
-  };
-
-  const premiumLabel =
-    state.profile.subscriptionStatus === "premium"
-      ? "Active premium subscription"
-      : "7-day free trial, then $4.99/mo or $29.99/yr.";
-
-  return (
-    <Screen title={state.profile.name} subtitle={`With ${state.profile.ownerName || "their favorite human"}`}>
-      <View style={styles.profileTop}>
-        <View style={styles.avatar}>
-          <Ionicons name="paw-outline" size={38} color={colors.primary} />
-        </View>
-        <View style={styles.profileInfo}>
-          <Text style={styles.bigHeadline}>{state.profile.weightLbs.toFixed(1)} lb</Text>
-          <Text style={styles.bodyText}>{state.profile.breathingNotes}</Text>
-        </View>
-      </View>
-      <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Cloud account</Text>
-        <Text style={styles.bodyText}>{state.syncMessage}</Text>
-        {state.syncStatus === "failed" && (
-          <ActionButton icon="refresh-outline" label="Retry sync" onPress={actions.sync} compact />
-        )}
-        <View style={styles.buttonRow}>
-          <ActionButton icon="cloud-outline" label="Sync now" onPress={actions.sync} compact />
-          <ActionButton icon="log-out-outline" label="Sign out" onPress={actions.signOut} compact secondary />
-        </View>
-      </View>
-      <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Premium</Text>
-        <Text style={styles.bodyText}>{premiumLabel}</Text>
-        {state.profile.subscriptionStatus !== "premium" && (
-          <ActionButton icon="card-outline" label="View trial offer" onPress={() => open("paywall")} />
-        )}
-        <Pressable style={styles.restoreButton} onPress={handleRestore} disabled={restoring}>
-          <Text style={styles.restoreText}>{restoring ? "Restoring..." : "Restore purchases"}</Text>
-        </Pressable>
-      </View>
-      <SettingsRow icon="notifications-outline" label="Walk and medication reminders" value="Local preview" />
-      <Pressable onPress={() => Linking.openURL(PRIVACY_URL)}>
-        <SettingsRow icon="shield-checkmark-outline" label="Privacy policy" value="View privacy policy" />
-      </Pressable>
-      <Pressable onPress={() => Linking.openURL(TERMS_URL)}>
-        <SettingsRow icon="document-text-outline" label="Terms of service" value="View terms" />
-      </Pressable>
-      <Pressable onPress={() => Linking.openURL(SUPPORT_URL)}>
-        <SettingsRow icon="help-circle-outline" label="Support" value="Get help" />
-      </Pressable>
-      {state.account && (
-        <Pressable onPress={handleDeleteAccount} disabled={deleting}>
-          <SettingsRow icon="trash-outline" label="Delete account" value={deleting ? "Deleting..." : "Permanently remove all cloud data"} />
-        </Pressable>
-      )}
-    </Screen>
-  );
-};
-
-// ══════════════════════════════════════════════════════════════════
-// Sheets
-// ══════════════════════════════════════════════════════════════════
-
-const AuthSheet = ({ actions, close, signedIn }: { actions: ScreenProps["actions"]; close: () => void; signedIn: boolean }) => {
-  const [mode, setMode] = useState<"signin" | "signup">("signup");
-  const [name, setName] = useState("");
-  const [owner, setOwner] = useState("");
-  const [passcode, setPasscode] = useState("");
+const OnboardingScreen = ({ actions }: { actions: Store["actions"] }) => {
+  const t = useTheme();
+  const [step, setStep] = useState<"welcome" | "signup" | "signin">("welcome");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [pupName, setPupName] = useState("");
+  const [ownerName, setOwnerName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
-    setBusy(true);
-    setError("");
+  const submit = async (mode: "signup" | "signin") => {
+    setBusy(true); setError("");
     try {
-      if (mode === "signup") await actions.signUp(name, passcode, owner);
-      else await actions.signIn(name, passcode);
-      await actions.sync();
-      close();
+      if (mode === "signup") await actions.signUp(email, password, pupName, ownerName);
+      else await actions.signIn(email, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed.");
-    } finally {
-      setBusy(false);
-    }
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally { setBusy(false); }
   };
 
   return (
-    <View>
-      <Text style={styles.sheetTitle}>{signedIn ? "Cloud account" : "Sync your Frenchie"}</Text>
-      <View style={styles.segmented}>
-        {(["signup", "signin"] as const).map((item) => (
-          <Pressable key={item} style={[styles.segment, mode === item && styles.segmentActive]} onPress={() => setMode(item)}>
-            <Text style={[styles.segmentText, mode === item && styles.segmentTextActive]}>{item === "signup" ? "Create" : "Sign in"}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Field label="Frenchie name" value={name} onChangeText={setName} placeholder="Mochi" />
-      {mode === "signup" && <Field label="Owner name" value={owner} onChangeText={setOwner} placeholder="Heather" />}
-      <Field label="Passcode" value={passcode} onChangeText={setPasscode} placeholder="6+ characters" secureTextEntry />
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <ActionButton icon="cloud-upload-outline" label={busy ? "Working..." : mode === "signup" ? "Create account" : "Restore pup"} onPress={submit} />
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+      <ScrollView contentContainerStyle={{ paddingHorizontal: t.space.lg24, paddingTop: 80, paddingBottom: 48 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <FadeIn>
+          <View style={{ alignItems: "center", marginBottom: t.space.xl32 }}>
+            <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: t.color.primarySubtle, alignItems: "center", justifyContent: "center", ...t.elevation.sm }}>
+              <Ionicons name="paw" size={46} color={t.color.primaryDeep} />
+            </View>
+            <Text style={{ fontFamily: t.font.displayBold, fontSize: 34, color: t.color.text, marginTop: 18 }}>Frenchie Buddy</Text>
+            <Text style={{ fontFamily: t.font.body, fontSize: 16, color: t.color.textSecondary, textAlign: "center", marginTop: 6, maxWidth: 290 }}>The care companion built for flat-faced breeds.</Text>
+          </View>
+        </FadeIn>
+
+        {step === "welcome" && (
+          <>
+            {ONBOARDING_FEATURES.map((f, i) => (
+              <FadeIn key={f.title} delay={i * 70}>
+                <View style={{ flexDirection: "row", gap: t.space.base16, alignItems: "center", marginBottom: t.space.base16 }}>
+                  <View style={{ width: 48, height: 48, borderRadius: t.radius.md, backgroundColor: t.color.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: t.color.border }}>
+                    <Ionicons name={f.icon} size={22} color={t.color.primaryDeep} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: t.font.bodyBold, fontSize: 16, color: t.color.text }}>{f.title}</Text>
+                    <Text style={{ fontFamily: t.font.body, fontSize: 13, lineHeight: 18, color: t.color.textSecondary, marginTop: 2 }}>{f.desc}</Text>
+                  </View>
+                </View>
+              </FadeIn>
+            ))}
+            <View style={{ marginTop: t.space.base16 }}>
+              <ActionButton icon="paw-outline" label="Create an account" onPress={() => { setStep("signup"); setError(""); }} />
+              <ActionButton icon="log-in-outline" label="I already have an account" onPress={() => { setStep("signin"); setError(""); }} secondary />
+            </View>
+            <LegalRow />
+          </>
+        )}
+
+        {step !== "welcome" && (
+          <>
+            <PressableScale onPress={() => { setStep("welcome"); setError(""); }} accessibilityLabel="Back" style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: t.space.lg24, alignSelf: "flex-start" }}>
+              <Ionicons name="arrow-back" size={22} color={t.color.primaryDeep} />
+              <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 15, color: t.color.primaryDeep }}>Back</Text>
+            </PressableScale>
+            <Text style={{ fontFamily: t.font.displayBold, fontSize: 24, color: t.color.text, marginBottom: 6 }}>{step === "signup" ? "Create your pup's profile" : "Welcome back"}</Text>
+            <Text style={{ fontFamily: t.font.body, fontSize: 15, lineHeight: 21, color: t.color.textSecondary, marginBottom: t.space.lg24 }}>
+              {step === "signup" ? "Create an account to safely sync your Frenchie across devices." : "Sign in to restore your Frenchie's data."}
+            </Text>
+            <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address" autoCorrect={false} />
+            <Field label="Password" value={password} onChangeText={setPassword} placeholder="6+ characters" secureTextEntry />
+            {step === "signup" && <Field label="Frenchie's name" value={pupName} onChangeText={setPupName} placeholder="Mochi" autoCapitalize="words" />}
+            {step === "signup" && <Field label="Your name (optional)" value={ownerName} onChangeText={setOwnerName} placeholder="Heather" autoCapitalize="words" />}
+            {error ? <Text style={{ fontFamily: t.font.body, fontSize: 13, color: t.color.dangerDeep, marginTop: 4 }}>{error}</Text> : null}
+            <ActionButton icon={step === "signup" ? "checkmark-circle-outline" : "log-in-outline"} label={busy ? "Working…" : step === "signup" ? "Create account" : "Sign in"} onPress={() => submit(step === "signup" ? "signup" : "signin")} disabled={busy} />
+            <LegalRow />
+          </>
+        )}
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+};
+
+const LegalRow = () => {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "center", marginTop: t.space.lg24, gap: 4 }}>
+      <Pressable onPress={() => Linking.openURL(TERMS_URL)}><Text style={{ fontFamily: t.font.bodySemibold, fontSize: 13, color: t.color.textSecondary, textDecorationLine: "underline" }}>Terms</Text></Pressable>
+      <Text style={{ color: t.color.textTertiary }}>·</Text>
+      <Pressable onPress={() => Linking.openURL(PRIVACY_URL)}><Text style={{ fontFamily: t.font.bodySemibold, fontSize: 13, color: t.color.textSecondary, textDecorationLine: "underline" }}>Privacy</Text></Pressable>
     </View>
   );
 };
 
-const HealthSheet = ({ actions, close, weight }: { actions: ScreenProps["actions"]; close: () => void; weight: number }) => {
-  const [breathingEffort, setBreathingEffort] = useState(0.35);
-  const [snoringLevel, setSnoringLevel] = useState(0.4);
-  const [sleepHours, setSleepHours] = useState(12);
-  const [weightLbs, setWeightLbs] = useState(weight);
-  const [note, setNote] = useState("");
-  const save = () => {
-    actions.addHealth({ breathingEffort, snoringLevel, sleepHours, weightLbs, activity: breathingEffort > 0.55 ? "Low" : "Moderate", note: note || "New breathing check-in saved." });
-    close();
+// ══════════════════════════════════════════════════════════════════
+// Safety (hero) screen
+// ══════════════════════════════════════════════════════════════════
+const verdict: Record<SafetyLevel, string> = {
+  Safe: "Good for a short, shaded walk. Bring water and watch the breathing.",
+  Caution: "Keep it brief and slow. Stop the moment panting ramps up.",
+  Danger: "Skip the walk. Try indoor enrichment and cool-down time.",
+};
+
+const SafetyScreen = ({ state, actions, open }: ScreenProps) => {
+  const t = useTheme();
+  const last = state.heatReadings[0];
+  const [temperature, setTemperature] = useState(last?.temperatureF ?? 76);
+  const [humidity, setHumidity] = useState(last?.humidity ?? 58);
+  const [saved, setSaved] = useState(false);
+  const live = evaluateHeat(temperature, humidity);
+  const fill = heatFill(temperature, humidity);
+  const heroGradient = t.scheme === "dark"
+    ? ([t.color.surface, t.color.surfaceAlt] as [string, string])
+    : ([t.color.surface, zoneColor(t, live.level) + "22"] as [string, string]);
+  const walkMin = Math.floor(state.walkTimer.seconds / 60);
+  const walkSec = String(state.walkTimer.seconds % 60).padStart(2, "0");
+
+  const saveReading = () => { actions.setHeat(temperature, humidity); setSaved(true); setTimeout(() => setSaved(false), 1800); };
+  const mood = state.moodScans[0];
+
+  return (
+    <Screen kicker={`${state.profile.name || "Your pup"}'s decision center`} title="Heat Safety">
+      <FadeIn delay={60}>
+        <GradientHero colors={heroGradient} style={{ alignItems: "center", paddingVertical: t.space.xl32 }}>
+          <Text style={{ fontFamily: t.type.caption.fontFamily, fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", color: zoneDeep(t, live.level), marginBottom: t.space.sm8 }}>Heat Safety Meter</Text>
+          <ArcGauge value={fill} level={live.level} centerLabel={Math.round(temperature)} centerSuffix="°" />
+          <Text style={{ fontFamily: t.font.serif, fontSize: 16, lineHeight: 23, color: t.color.text, textAlign: "center", marginTop: t.space.md12, maxWidth: 300 }}>{verdict[live.level]}</Text>
+          <View style={{ flexDirection: "row", gap: t.space.sm8, marginTop: t.space.base16, alignSelf: "stretch" }}>
+            <Metric label="Temp" value={`${Math.round(temperature)}°F`} icon="thermometer-outline" />
+            <Metric label="Humidity" value={`${Math.round(humidity)}%`} icon="water-outline" />
+            <Metric label="Pavement" value={temperature >= 85 ? "Hot" : "OK"} icon="footsteps-outline" />
+          </View>
+        </GradientHero>
+      </FadeIn>
+
+      <SectionHeader title="Adjust conditions" meta={live.level} />
+      <FadeIn delay={120}>
+        <Stepper label="Temperature" value={temperature} suffix="°F" min={35} max={110} onChange={setTemperature} />
+        <Stepper label="Humidity" value={humidity} suffix="%" min={0} max={100} onChange={setHumidity} />
+        <ActionButton icon={saved ? "checkmark-outline" : "bookmark-outline"} label={saved ? "Saved!" : "Save this reading"} onPress={saveReading} />
+      </FadeIn>
+
+      <View style={{ flexDirection: "row", gap: t.space.md12, marginTop: t.space.base16 }}>
+        <Card style={{ flex: 1, padding: t.space.base16 }}>
+          <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 14, color: t.color.textSecondary }}>Walk timer</Text>
+          <Text style={{ fontFamily: t.font.displayBold, fontSize: 30, color: t.color.text, marginVertical: 4 }}>{walkMin}:{walkSec}</Text>
+          <ActionButton icon={state.walkTimer.active ? "pause" : "play"} label={state.walkTimer.active ? "Stop" : "Start"} onPress={state.walkTimer.active ? actions.stopWalk : actions.startWalk} compact />
+        </Card>
+        <Card style={{ flex: 1, padding: t.space.base16 }}>
+          <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 14, color: t.color.textSecondary }}>Today's mood</Text>
+          <Text style={{ fontFamily: t.font.display, fontSize: 18, color: t.color.text, marginVertical: 4 }} numberOfLines={1}>{mood ? mood.moodTitle : "Not logged"}</Text>
+          <ActionButton icon="happy-outline" label="Log" onPress={() => open("mood")} compact secondary />
+        </Card>
+      </View>
+    </Screen>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// Pulse (tip + mood) screen
+// ══════════════════════════════════════════════════════════════════
+const PulseScreen = ({ state, open }: ScreenProps) => {
+  const t = useTheme();
+  const mood = state.moodScans[0];
+  const h = state.horoscope;
+  return (
+    <Screen kicker="Playful care notes for today" title="Daily Pulse">
+      <FadeIn delay={60}>
+        <GradientHero colors={t.treatment.horoscopeGradient[t.scheme] as [string, string]}>
+          <Text style={{ fontFamily: t.type.caption.fontFamily, fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", color: t.color.accent }}>{h.starSign}</Text>
+          <Text style={{ fontFamily: t.font.displayBold, fontSize: 24, color: t.color.onInk, marginTop: 8 }}>{h.title}</Text>
+          <Text style={{ fontFamily: t.font.body, fontSize: 15, lineHeight: 22, color: t.color.onInk, opacity: 0.92, marginTop: 8 }}>{h.body}</Text>
+          <View style={{ flexDirection: "row", gap: 8, marginTop: t.space.base16, padding: t.space.md12, borderRadius: t.radius.md, backgroundColor: "rgba(255,255,255,0.08)" }}>
+            <Ionicons name="bulb-outline" size={18} color={t.color.accent} />
+            <Text style={{ flex: 1, fontFamily: t.font.body, fontSize: 13, lineHeight: 19, color: t.color.onInk }}>{h.tip}</Text>
+          </View>
+        </GradientHero>
+      </FadeIn>
+
+      <SectionHeader title="Mood log" meta={`${state.moodScans.length} logged`} />
+      {mood ? (
+        <FadeIn delay={100}>
+          <Card>
+            <Badge label="Latest" tone="primary" />
+            <Text style={{ fontFamily: t.font.display, fontSize: 20, color: t.color.text, marginTop: 8 }}>{mood.moodTitle}</Text>
+            <Text style={{ fontFamily: t.font.body, fontSize: 14, lineHeight: 21, color: t.color.textSecondary, marginTop: 4 }}>{mood.summary}</Text>
+            {mood.note ? <Text style={{ fontFamily: t.font.serif, fontSize: 14, color: t.color.textSecondary, marginTop: 8, fontStyle: "italic" }}>"{mood.note}"</Text> : null}
+          </Card>
+        </FadeIn>
+      ) : (
+        <EmptyState icon="happy-outline" title="No mood logged yet" body="Record how your Frenchie seems today — energy, comfort, and any little notes." actionLabel="Log a mood" onAction={() => open("mood")} />
+      )}
+      <ActionButton icon="add" label="Log a mood" onPress={() => open("mood")} />
+    </Screen>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// Health screen
+// ══════════════════════════════════════════════════════════════════
+const HealthScreen = ({ state, actions, open }: ScreenProps) => {
+  const t = useTheme();
+  const latest = state.healthEntries[0];
+  const trend = state.healthEntries.slice(0, 6).reverse();
+  const breathLevel: SafetyLevel = latest ? (latest.breathingEffort > 0.66 ? "Danger" : latest.breathingEffort > 0.45 ? "Caution" : "Safe") : "Safe";
+
+  return (
+    <Screen kicker="Breathing, weight, sleep & meds" title="Health Log">
+      <SectionHeader title="Today" action={<ActionPill label="Check-in" icon="add" onPress={() => open("health")} />} />
+      {latest ? (
+        <FadeIn delay={60}>
+          <Card>
+            <Metric label="Breathing effort" value={`${Math.round(latest.breathingEffort * 100)}%`} />
+            <Progress value={latest.breathingEffort} level={breathLevel} />
+            {latest.note ? <Text style={{ fontFamily: t.font.body, fontSize: 14, lineHeight: 21, color: t.color.textSecondary }}>{latest.note}</Text> : null}
+          </Card>
+        </FadeIn>
+      ) : (
+        <EmptyState icon="heart-outline" title="No check-ins yet" body="Log today's breathing, weight, and sleep to start spotting trends for your Frenchie." actionLabel="Add a check-in" onAction={() => open("health")} />
+      )}
+
+      {trend.length > 1 && (
+        <>
+          <SectionHeader title="Weight trend" meta="last 6" />
+          <FadeIn delay={100}><Sparkbars data={trend.map((e) => e.weightLbs)} format={(n) => n.toFixed(1)} /></FadeIn>
+        </>
+      )}
+
+      <SectionHeader title="Medications" action={<ActionPill label="Add" icon="add" onPress={() => open("medication")} />} />
+      {state.medications.length === 0 ? (
+        <EmptyState icon="medkit-outline" title="No medications" body="Add supplements or medications to get a simple daily reminder." actionLabel="Add medication" onAction={() => open("medication")} />
+      ) : (
+        state.medications.map((med, i) => (
+          <FadeIn key={med.id} delay={i * 50}>
+            <PressableScale onPress={() => actions.toggleMedication(med.id)} accessibilityLabel={med.name} style={{ flexDirection: "row", gap: t.space.md12, alignItems: "center", backgroundColor: t.color.surface, borderRadius: t.radius.md, padding: t.space.base16, marginBottom: t.space.sm8, borderWidth: 1, borderColor: t.color.border }}>
+              <Ionicons name={med.givenToday ? "checkmark-circle" : "ellipse-outline"} size={26} color={med.givenToday ? t.color.success : t.color.textTertiary} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 15, color: t.color.text }}>{med.name}</Text>
+                <Text style={{ fontFamily: t.font.body, fontSize: 13, color: t.color.textSecondary, marginTop: 2 }}>{med.dosage} · {med.schedule}</Text>
+              </View>
+            </PressableScale>
+          </FadeIn>
+        ))
+      )}
+      <Text style={{ fontFamily: t.font.body, fontSize: 12, lineHeight: 18, color: t.color.textTertiary, marginTop: t.space.base16 }}>{HEALTH_DISCLAIMER}</Text>
+    </Screen>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// Journal screen
+// ══════════════════════════════════════════════════════════════════
+const JournalScreen = ({ state, open }: ScreenProps) => {
+  const t = useTheme();
+  const [stage, setStage] = useState<LifeStage | "All">("All");
+  const filtered = stage === "All" ? state.memories : state.memories.filter((m) => m.stage === stage);
+  return (
+    <Screen kicker="Milestones & favorite days" title="Memory Journal">
+      <SegmentedControl segments={["All", "Puppyhood", "Adult", "Senior"] as const} value={stage} onChange={setStage} />
+      <ActionButton icon="add-circle-outline" label="Add a memory" onPress={() => open("memory")} />
+      {filtered.length === 0 ? (
+        <EmptyState icon="book-outline" title={stage === "All" ? "No memories yet" : `No ${stage.toLowerCase()} memories`} body="Capture a milestone or a tiny win — they add up to your Frenchie's story." actionLabel="Add a memory" onAction={() => open("memory")} />
+      ) : (
+        filtered.map((m, i) => (
+          <FadeIn key={m.id} delay={i * 60}>
+            <Card elevated="sm" style={{ padding: t.space.md12, marginTop: t.space.md12, flexDirection: "row", gap: t.space.md12 }}>
+              <View style={{ width: 76, borderRadius: t.radius.md, alignItems: "center", justifyContent: "center", backgroundColor: "#" + m.colorHex.toString(16).padStart(6, "0") }}>
+                <Ionicons name="image-outline" size={26} color={t.color.onPrimary} />
+              </View>
+              <View style={{ flex: 1, justifyContent: "center" }}>
+                <Text style={{ fontFamily: t.font.serif, fontSize: 11, letterSpacing: 0.4, textTransform: "uppercase", color: t.color.textTertiary }}>{m.stage} · {new Date(m.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</Text>
+                <Text style={{ fontFamily: t.font.display, fontSize: 16, lineHeight: 21, color: t.color.text, marginVertical: 4 }}>{m.caption}</Text>
+                {m.milestone ? <Badge label={m.milestone} tone="accent" /> : null}
+              </View>
+            </Card>
+          </FadeIn>
+        ))
+      )}
+    </Screen>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// Profile screen
+// ══════════════════════════════════════════════════════════════════
+const ProfileScreen = ({ state, actions, open }: ScreenProps) => {
+  const t = useTheme();
+  const [deleting, setDeleting] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+
+  const handleDelete = () => {
+    if (!state.account) return;
+    Alert.alert("Delete account?", "This permanently removes your Frenchie's cloud data. This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => { setDeleting(true); try { await actions.deleteAccount(); } catch (e) { Alert.alert("Error", e instanceof Error ? e.message : "Delete failed."); } finally { setDeleting(false); } } },
+    ]);
   };
+  const handleRestore = async () => {
+    setRestoring(true);
+    try { const ok = await actions.restorePurchases(); Alert.alert(ok ? "Restored" : "No purchases found", ok ? "Premium access restored." : "We couldn't find previous purchases."); }
+    catch { Alert.alert("Error", "Restore failed."); } finally { setRestoring(false); }
+  };
+
+  return (
+    <Screen kicker={`With ${state.profile.ownerName || "their favorite human"}`} title={state.profile.name || "Your Frenchie"}>
+      <FadeIn delay={60}>
+        <PressableScale onPress={() => open("health")} accessibilityLabel="Add or update weight"
+          style={{ backgroundColor: t.color.surface, borderRadius: t.radius.lg, padding: t.space.lg24, borderWidth: 1, borderColor: t.color.border, flexDirection: "row", gap: t.space.base16, alignItems: "center", ...t.elevation.sm }}>
+          <View style={{ width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", backgroundColor: t.color.primarySubtle }}>
+            <Ionicons name="paw" size={30} color={t.color.primaryDeep} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontFamily: t.font.displayBold, fontSize: 22, color: t.color.text }}>{state.profile.weightLbs > 0 ? `${state.profile.weightLbs.toFixed(1)} lb` : "Add weight"}</Text>
+            <Text style={{ fontFamily: t.font.body, fontSize: 13, color: t.color.textSecondary, marginTop: 2 }}>{state.profile.weightLbs > 0 ? "Tap to log a new check-in" : "Tap to add your Frenchie's weight"}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={t.color.textTertiary} />
+        </PressableScale>
+      </FadeIn>
+
+      <FadeIn delay={100}>
+        <Card style={{ marginTop: t.space.md12 }}>
+          <Text style={{ fontFamily: t.font.display, fontSize: 16, color: t.color.text, marginBottom: 6 }}>Cloud account</Text>
+          <Text style={{ fontFamily: t.font.body, fontSize: 14, lineHeight: 20, color: t.color.textSecondary }}>{state.syncMessage}</Text>
+          <View style={{ flexDirection: "row", gap: t.space.md12 }}>
+            <ActionButton icon="cloud-outline" label="Sync now" onPress={actions.sync} compact />
+            <ActionButton icon="log-out-outline" label="Sign out" onPress={actions.signOut} compact secondary />
+          </View>
+        </Card>
+      </FadeIn>
+
+      <FadeIn delay={140}>
+        <Card style={{ marginTop: t.space.md12 }}>
+          <Text style={{ fontFamily: t.font.display, fontSize: 16, color: t.color.text, marginBottom: 6 }}>Premium</Text>
+          <Text style={{ fontFamily: t.font.body, fontSize: 14, lineHeight: 20, color: t.color.textSecondary }}>{state.profile.subscriptionStatus === "premium" ? "Active premium subscription." : "7-day free trial, then $4.99/mo or $29.99/yr."}</Text>
+          {state.profile.subscriptionStatus !== "premium" && <ActionButton icon="card-outline" label="View trial offer" onPress={() => open("paywall")} />}
+          <PressableScale onPress={handleRestore} disabled={restoring} accessibilityLabel="Restore purchases" style={{ minHeight: 44, alignItems: "center", justifyContent: "center", marginTop: 4 }}>
+            <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 14, color: t.color.primaryDeep }}>{restoring ? "Restoring…" : "Restore purchases"}</Text>
+          </PressableScale>
+        </Card>
+      </FadeIn>
+
+      <View style={{ marginTop: t.space.lg24 }}>
+        <SettingsRow icon="shield-checkmark-outline" label="Privacy policy" onPress={() => Linking.openURL(PRIVACY_URL)} />
+        <SettingsRow icon="document-text-outline" label="Terms of service" onPress={() => Linking.openURL(TERMS_URL)} />
+        <SettingsRow icon="help-circle-outline" label="Support" onPress={() => Linking.openURL(SUPPORT_URL)} />
+        {state.account ? <SettingsRow icon="trash-outline" label="Delete account" value={deleting ? "Deleting…" : "Permanently remove all data"} destructive onPress={handleDelete} /> : null}
+      </View>
+    </Screen>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// Sheet host + sheets
+// ══════════════════════════════════════════════════════════════════
+const SheetHost = ({ sheet, setSheet, state, actions }: { sheet: Sheet; setSheet: (s: Sheet) => void; state: Store["state"]; actions: Store["actions"] }) => {
+  const t = useTheme();
+  return (
+    <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={() => setSheet(null)}>
+      <Pressable style={{ flex: 1, justifyContent: "flex-end", backgroundColor: t.color.scrim }} onPress={() => setSheet(null)}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ justifyContent: "flex-end" }}>
+          <Pressable style={{ backgroundColor: t.color.bg, borderTopLeftRadius: t.radius.xl, borderTopRightRadius: t.radius.xl, maxHeight: "88%" }} onPress={(e) => e.stopPropagation()}>
+            <View style={{ alignItems: "center", paddingTop: 10 }}>
+              <View style={{ width: 44, height: 4, borderRadius: 999, backgroundColor: t.color.border }} />
+              <PressableScale onPress={() => setSheet(null)} accessibilityLabel="Close" hitSlop={12} style={{ position: "absolute", right: 16, top: 8, width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: t.color.surfaceAlt }}>
+                <Ionicons name="close" size={20} color={t.color.text} />
+              </PressableScale>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: t.space.lg24, paddingTop: t.space.base16, paddingBottom: t.space.xl32 }}>
+              {sheet === "health" && <HealthSheet close={() => setSheet(null)} actions={actions} weight={state.profile.weightLbs} />}
+              {sheet === "memory" && <MemorySheet close={() => setSheet(null)} actions={actions} />}
+              {sheet === "medication" && <MedicationSheet close={() => setSheet(null)} actions={actions} />}
+              {sheet === "mood" && <MoodSheet close={() => setSheet(null)} actions={actions} />}
+              {sheet === "paywall" && <PaywallSheet close={() => setSheet(null)} actions={actions} />}
+            </ScrollView>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Pressable>
+    </Modal>
+  );
+};
+
+const SheetTitle = ({ children }: { children: React.ReactNode }) => {
+  const t = useTheme();
+  return <Text style={{ fontFamily: t.font.displayBold, fontSize: 24, color: t.color.text, marginBottom: t.space.base16 }}>{children}</Text>;
+};
+
+const HealthSheet = ({ actions, close, weight }: { actions: Store["actions"]; close: () => void; weight: number }) => {
+  const [breathingEffort, setBreathingEffort] = useState(35);
+  const [snoringLevel, setSnoringLevel] = useState(40);
+  const [sleepHours, setSleepHours] = useState(12);
+  const [weightLbs, setWeightLbs] = useState(weight > 0 ? weight : 24);
+  const [note, setNote] = useState("");
   return (
     <View>
-      <Text style={styles.sheetTitle}>Breathing check-in</Text>
-      <Stepper label="Breathing effort" value={Math.round(breathingEffort * 100)} suffix="%" min={0} max={100} onChange={(v) => setBreathingEffort(v / 100)} />
-      <Stepper label="Snoring level" value={Math.round(snoringLevel * 100)} suffix="%" min={0} max={100} onChange={(v) => setSnoringLevel(v / 100)} />
+      <SheetTitle>Breathing check-in</SheetTitle>
+      <Stepper label="Breathing effort" value={breathingEffort} suffix="%" min={0} max={100} onChange={setBreathingEffort} />
+      <Stepper label="Snoring level" value={snoringLevel} suffix="%" min={0} max={100} onChange={setSnoringLevel} />
       <Stepper label="Sleep" value={sleepHours} suffix=" hr" min={0} max={24} onChange={setSleepHours} />
       <Stepper label="Weight" value={weightLbs} suffix=" lb" min={5} max={80} onChange={setWeightLbs} />
       <Field label="Notes" value={note} onChangeText={setNote} placeholder="What changed today?" multiline />
-      <ActionButton icon="save-outline" label="Save check-in" onPress={save} />
+      <ActionButton icon="save-outline" label="Save check-in" onPress={() => { actions.addHealth({ breathingEffort: breathingEffort / 100, snoringLevel: snoringLevel / 100, sleepHours, weightLbs, activity: breathingEffort > 55 ? "Low" : "Moderate", note }); close(); }} />
     </View>
   );
 };
 
-const MemorySheet = ({ actions, close }: { actions: ScreenProps["actions"]; close: () => void }) => {
+const MemorySheet = ({ actions, close }: { actions: Store["actions"]; close: () => void }) => {
   const [caption, setCaption] = useState("");
   const [stage, setStage] = useState<LifeStage>("Adult");
   return (
     <View>
-      <Text style={styles.sheetTitle}>Add memory</Text>
+      <SheetTitle>Add a memory</SheetTitle>
       <Field label="Caption" value={caption} onChangeText={setCaption} placeholder="A tiny win from today" multiline />
-      <View style={styles.segmented}>
-        {(["Puppyhood", "Adult", "Senior"] as const).map((item) => (
-          <Pressable key={item} style={[styles.segment, stage === item && styles.segmentActive]} onPress={() => setStage(item)}>
-            <Text style={[styles.segmentText, stage === item && styles.segmentTextActive]}>{item}</Text>
-          </Pressable>
-        ))}
-      </View>
+      <SegmentedControl segments={["Puppyhood", "Adult", "Senior"] as const} value={stage} onChange={setStage} />
       <ActionButton icon="save-outline" label="Save memory" onPress={() => { actions.addMemory(caption, stage); close(); }} />
     </View>
   );
 };
 
-const MedicationSheet = ({ actions, close }: { actions: ScreenProps["actions"]; close: () => void }) => {
+const MedicationSheet = ({ actions, close }: { actions: Store["actions"]; close: () => void }) => {
   const [name, setName] = useState("");
   return (
     <View>
-      <Text style={styles.sheetTitle}>Medication reminder</Text>
+      <SheetTitle>Medication reminder</SheetTitle>
       <Field label="Name" value={name} onChangeText={setName} placeholder="Supplement or medication" />
       <ActionButton icon="add-circle-outline" label="Add reminder" onPress={() => { actions.addMedication(name); close(); }} />
     </View>
   );
 };
 
-const MoodSheet = ({ actions, close, isPremium }: { actions: ScreenProps["actions"]; close: () => void; isPremium: boolean }) => {
+const MOODS: { title: string; energy: string; summary: string }[] = [
+  { title: "Cozy & calm", energy: "Calm", summary: "Relaxed posture and soft eyes — a gentle, predictable day suits best." },
+  { title: "Zoomies", energy: "Playful", summary: "High spark and playful energy — short bursts of indoor play are perfect." },
+  { title: "Curious", energy: "Curious", summary: "Alert and focused — a great time for a little training." },
+  { title: "Tired", energy: "Low", summary: "Low energy and lots of rest — keep activity light and offer water." },
+  { title: "Clingy", energy: "Affectionate", summary: "Extra cuddly and close — a slow, comforting day is ideal." },
+  { title: "Off / unwell", energy: "Watch", summary: "Seems a little off — watch breathing and comfort closely today." },
+];
+
+const MoodSheet = ({ actions, close }: { actions: Store["actions"]; close: () => void }) => {
+  const t = useTheme();
+  const [pick, setPick] = useState<number | null>(null);
   const [note, setNote] = useState("");
   return (
     <View>
-      <Text style={styles.sheetTitle}>Mood scan</Text>
-      <Text style={styles.bodyText}>
-        {isPremium ? "Describe the photo or moment. The local adapter will generate a realistic mood result." : "Premium preview: this uses a local adapter until AI photo analysis keys are configured."}
-      </Text>
-      <Field label="What do you notice?" value={note} onChangeText={setNote} placeholder="Sleepy eyes after breakfast" multiline />
-      <ActionButton icon="sparkles-outline" label="Generate mood result" onPress={() => { actions.scanMood(note); close(); }} />
+      <SheetTitle>Log today's mood</SheetTitle>
+      <Text style={{ fontFamily: t.font.body, fontSize: 14, lineHeight: 20, color: t.color.textSecondary, marginBottom: t.space.base16 }}>How does your Frenchie seem today? Tap the closest match.</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm8 }}>
+        {MOODS.map((m, i) => {
+          const active = pick === i;
+          return (
+            <PressableScale key={m.title} onPress={() => setPick(i)} accessibilityLabel={m.title} style={{ paddingHorizontal: t.space.base16, paddingVertical: t.space.md12, borderRadius: t.radius.pill, backgroundColor: active ? t.color.primary : t.color.surface, borderWidth: 1.5, borderColor: active ? t.color.primary : t.color.border }}>
+              <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 14, color: active ? t.color.onPrimary : t.color.text }}>{m.title}</Text>
+            </PressableScale>
+          );
+        })}
+      </View>
+      <View style={{ marginTop: t.space.base16 }}>
+        <Field label="Note (optional)" value={note} onChangeText={setNote} placeholder="Sleepy eyes after breakfast" multiline />
+      </View>
+      <ActionButton icon="checkmark-circle-outline" label="Save mood" disabled={pick === null} onPress={() => { if (pick === null) return; const m = MOODS[pick]; actions.logMood({ moodTitle: m.title, energyTag: m.energy, summary: m.summary, note }); close(); }} />
     </View>
   );
 };
 
-const PaywallSheet = ({ actions, close }: { actions: ScreenProps["actions"]; close: () => void }) => {
+const PaywallSheet = ({ actions, close }: { actions: Store["actions"]; close: () => void }) => {
+  const t = useTheme();
   const [packages, setPackages] = useState<OfferingPackages>({ monthly: null, annual: null });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    getPackages().then(setPackages).catch(() => undefined);
-  }, []);
+  useEffect(() => { getPackages().then(setPackages).catch(() => undefined); }, []);
 
-  const handlePurchase = async (type: "monthly" | "annual") => {
+  const buy = async (type: "monthly" | "annual") => {
     const pkg = packages[type];
-    if (!pkg) return;
-    setBusy(true);
-    setError("");
-    try {
-      const isPremium = await purchasePackage(pkg);
-      if (isPremium) {
-        actions.setPremiumStatus("premium");
-        close();
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Purchase failed.";
-      if (!msg.includes("cancelled")) setError(msg);
-    } finally {
-      setBusy(false);
-    }
+    if (!pkg) { setError("Plans aren't available right now. Please try again."); return; }
+    setBusy(true); setError("");
+    try { const ok = await purchasePackage(pkg); if (ok) { actions.setPremiumStatus("premium"); close(); } }
+    catch (e) { const m = e instanceof Error ? e.message : "Purchase failed."; if (!m.includes("cancelled")) setError(m); }
+    finally { setBusy(false); }
   };
 
-  const handleRestore = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const isPremium = await actions.restorePurchases();
-      if (isPremium) close();
-      else setError("No previous purchases found.");
-    } catch {
-      setError("Restore failed. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const monthlyLabel = packages.monthly
-    ? `Monthly — ${packages.monthly.product.priceString}/mo`
-    : "Monthly — $4.99/mo";
-  const annualLabel = packages.annual
-    ? `Annual — ${packages.annual.product.priceString}/yr`
-    : "Annual — $29.99/yr";
+  const monthly = packages.monthly ? `${packages.monthly.product.priceString}/mo` : "$4.99/mo";
+  const annual = packages.annual ? `${packages.annual.product.priceString}/yr` : "$29.99/yr";
 
   return (
     <View>
-      <Text style={styles.sheetTitle}>Frenchie Buddy Premium</Text>
-      <Text style={styles.bigHeadline}>7-day free trial</Text>
-      <Text style={styles.bodyText}>Try all premium features free for 7 days. Cancel anytime.</Text>
-      {premiumBenefits.map((benefit) => (
-        <View key={benefit} style={styles.benefitRow}>
-          <Ionicons name="checkmark-circle-outline" size={20} color={colors.success} />
-          <Text style={styles.bodyText}>{benefit}</Text>
+      <SheetTitle>Frenchie Buddy Premium</SheetTitle>
+      <Text style={{ fontFamily: t.font.display, fontSize: 20, color: t.color.primaryDeep, marginBottom: 4 }}>7-day free trial</Text>
+      <Text style={{ fontFamily: t.font.body, fontSize: 14, lineHeight: 20, color: t.color.textSecondary, marginBottom: t.space.base16 }}>Try every premium feature free for 7 days. Cancel anytime.</Text>
+      {premiumBenefits.map((b) => (
+        <View key={b} style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm8, marginBottom: t.space.sm8 }}>
+          <Ionicons name="checkmark-circle" size={20} color={t.color.success} />
+          <Text style={{ flex: 1, fontFamily: t.font.body, fontSize: 14, color: t.color.text }}>{b}</Text>
         </View>
       ))}
-      <ActionButton icon="sparkles-outline" label={busy ? "Working..." : monthlyLabel} onPress={() => handlePurchase("monthly")} />
-      <ActionButton icon="card-outline" label={busy ? "Working..." : annualLabel} onPress={() => handlePurchase("annual")} secondary />
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <Pressable style={styles.restoreButton} onPress={handleRestore}>
-        <Text style={styles.restoreText}>Restore purchases</Text>
-      </Pressable>
-      <View style={styles.legalRow}>
-        <Pressable onPress={() => Linking.openURL(TERMS_URL)}>
-          <Text style={styles.legalLink}>Terms</Text>
-        </Pressable>
-        <Text style={styles.legalDot}> · </Text>
-        <Pressable onPress={() => Linking.openURL(PRIVACY_URL)}>
-          <Text style={styles.legalLink}>Privacy</Text>
-        </Pressable>
-      </View>
-      <Text style={styles.autoRenewText}>
-        Payment will be charged to your App Store account. Subscription automatically renews unless canceled at least 24 hours before the end of the current period.
+      <ActionButton icon="sparkles-outline" label={busy ? "Working…" : `Start trial — ${annual}`} onPress={() => buy("annual")} disabled={busy} />
+      <ActionButton icon="card-outline" label={busy ? "Working…" : `Monthly — ${monthly}`} onPress={() => buy("monthly")} secondary disabled={busy} />
+      {error ? <Text style={{ fontFamily: t.font.body, fontSize: 13, color: t.color.dangerDeep, marginTop: 8 }}>{error}</Text> : null}
+      <PressableScale onPress={async () => { const ok = await actions.restorePurchases(); if (ok) close(); else setError("No previous purchases found."); }} accessibilityLabel="Restore purchases" style={{ minHeight: 44, alignItems: "center", justifyContent: "center", marginTop: 4 }}>
+        <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 14, color: t.color.primaryDeep }}>Restore purchases</Text>
+      </PressableScale>
+      <LegalRow />
+      <Text style={{ fontFamily: t.font.body, fontSize: 11, lineHeight: 16, color: t.color.textTertiary, textAlign: "center", marginTop: t.space.md12 }}>
+        Payment is charged to your App Store account. Subscriptions auto-renew unless canceled at least 24 hours before the end of the current period.
       </Text>
     </View>
   );

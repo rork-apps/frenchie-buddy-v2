@@ -1,156 +1,148 @@
+import "react-native-url-polyfill/auto";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createClient } from "@supabase/supabase-js";
+import { APP_SCHEMA, SUPABASE_ANON_KEY, SUPABASE_URL } from "../config";
 import {
   AccountPull,
   HealthEntry,
-  HealthEntryDTO,
   HeatReading,
-  HeatReadingDTO,
   Medication,
-  MedicationDTO,
-  MemoryDTO,
   MemoryEntry,
   MoodScan,
-  MoodScanDTO,
-  ProfileDTO,
   PupProfile,
 } from "../types";
 
-const SUPABASE_URL = "https://supabase.apppublishing.ai";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLXNlbGYtaG9zdGVkIiwiaWF0IjoxNzgwNjAyMjI2LCJleHAiOjQxMDI0NDQ4MDB9.AmDH0NbkuDHPi61_1udNgCtpbURbtqw2yNK5UIK-sws";
-const SCHEMA = "frenchie_buddy";
+// Single shared Supabase client. Real Supabase Auth + per-user RLS; the app
+// addresses ONLY its own schema. The anon key is public; RLS does the gating.
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    storage: AsyncStorage,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+  db: { schema: APP_SCHEMA },
+});
 
-const headers = {
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  "Content-Type": "application/json",
-  Accept: "application/json",
-  "Accept-Profile": SCHEMA,
-  "Content-Profile": SCHEMA,
+const friendlyAuthError = (message: string): Error => {
+  const m = message.toLowerCase();
+  if (m.includes("already registered") || m.includes("already been registered"))
+    return new Error("That email already has an account. Try signing in.");
+  if (m.includes("invalid login")) return new Error("That email and password don't match.");
+  if (m.includes("password")) return new Error("Password must be at least 6 characters.");
+  if (m.includes("email")) return new Error("Please enter a valid email address.");
+  if (m.includes("network") || m.includes("fetch")) return new Error("You're offline. Check your connection and try again.");
+  return new Error(message || "Authentication failed. Please try again.");
 };
 
-const rpc = async <T>(fn: string, body: Record<string, unknown>): Promise<T> => {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+export type Session = { userId: string; email: string };
 
-  const text = await response.text();
-  if (!response.ok) {
-    throw mapSupabaseError(text, response.status);
-  }
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
+export const getSession = async (): Promise<Session | null> => {
+  const { data } = await supabase.auth.getSession();
+  const u = data.session?.user;
+  return u ? { userId: u.id, email: u.email ?? "" } : null;
 };
 
-const mapSupabaseError = (body: string, status: number) => {
-  if (body.includes("NAME_TAKEN")) return new Error("That Frenchie name is already taken.");
-  if (body.includes("WEAK_PASSCODE")) return new Error("Please choose a passcode of at least 4 characters.");
-  if (body.includes("EMPTY_NAME")) return new Error("Please enter your Frenchie's name.");
-  if (body.includes("BAD_CREDENTIALS")) return new Error("That name and passcode do not match an account.");
-  return new Error(`Supabase request failed (${status}). Check your connection and try again.`);
+export const signUpEmail = async (email: string, password: string): Promise<Session> => {
+  const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+  if (error) throw friendlyAuthError(error.message);
+  const u = data.session?.user ?? data.user;
+  if (!u) throw new Error("Could not create the account. Please try again.");
+  return { userId: u.id, email: u.email ?? email.trim() };
 };
 
-export const isNameTaken = async (name: string): Promise<boolean> =>
-  rpc<boolean>("pup_name_taken", { p_name: name.trim() });
+export const signInEmail = async (email: string, password: string): Promise<Session> => {
+  const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+  if (error) throw friendlyAuthError(error.message);
+  const u = data.session?.user;
+  if (!u) throw new Error("Sign in failed. Please try again.");
+  return { userId: u.id, email: u.email ?? email.trim() };
+};
 
-export const registerPup = async (name: string, passcode: string, ownerName: string): Promise<string> =>
-  rpc<string>("pup_register", { p_name: name.trim(), p_passcode: passcode, p_owner: ownerName.trim() });
+export const signOut = async (): Promise<void> => {
+  await supabase.auth.signOut();
+};
 
-export const pullPup = async (name: string, passcode: string): Promise<AccountPull> =>
-  rpc<AccountPull>("pup_pull", { p_name: name.trim(), p_passcode: passcode });
+// ── Snapshot I/O (the single read/write surface; per-user via auth.uid() + RLS) ──
+export type Snapshot = {
+  profile: ReturnType<typeof toProfilePayload> | null;
+  health: ReturnType<typeof toHealthDTO>[];
+  memories: ReturnType<typeof toMemoryDTO>[];
+  medications: ReturnType<typeof toMedicationDTO>[];
+  moods: ReturnType<typeof toMoodDTO>[];
+  heat_readings: ReturnType<typeof toHeatDTO>[];
+};
 
-export const pushPup = async (
-  name: string,
-  passcode: string,
-  accountId: string,
+export const pullSnapshot = async (): Promise<AccountPull> => {
+  const { data, error } = await supabase.rpc("get_app_snapshot");
+  if (error) throw new Error(error.message);
+  const s = (data ?? {}) as any;
+  const session = await getSession();
+  return {
+    account_id: session?.userId ?? "",
+    owner_name: s.profile?.owner_name ?? "",
+    profile: s.profile ? { ...s.profile, id: s.profile.user_id } : null,
+    health: s.health ?? [],
+    memories: s.memories ?? [],
+    medications: s.medications ?? [],
+    moods: s.moods ?? [],
+    heat_readings: s.heat_readings ?? [],
+  };
+};
+
+export const pushSnapshot = async (
   profile: PupProfile,
   health: HealthEntry[],
   memories: MemoryEntry[],
   medications: Medication[],
   moods: MoodScan[],
-  heatReadings: HeatReading[]
-) =>
-  rpc<void>("pup_push", {
-    p_name: name.trim(),
-    p_passcode: passcode,
-    p_profile: toProfileDTO(profile, accountId),
-    p_health: health.map((entry) => toHealthDTO(entry, accountId)),
-    p_memories: memories.map((entry) => toMemoryDTO(entry, accountId)),
-    p_medications: medications.map((entry) => toMedicationDTO(entry, accountId)),
-    p_moods: moods.map((entry) => toMoodDTO(entry, accountId)),
-    p_heat_readings: heatReadings.map((entry) => toHeatDTO(entry, accountId)),
-  });
+  heatReadings: HeatReading[],
+): Promise<AccountPull> => {
+  const p_snapshot = {
+    profile: toProfilePayload(profile),
+    health: health.map(toHealthDTO),
+    memories: memories.map(toMemoryDTO),
+    medications: medications.map(toMedicationDTO),
+    moods: moods.map(toMoodDTO),
+    heat_readings: heatReadings.map(toHeatDTO),
+  };
+  const { error } = await supabase.rpc("sync_app_snapshot", { p_snapshot });
+  if (error) throw new Error(error.message);
+  return pullSnapshot();
+};
 
-export const deletePup = async (name: string, passcode: string): Promise<void> =>
-  rpc<void>("pup_delete", { p_name: name.trim(), p_passcode: passcode });
+export const deleteAccount = async (): Promise<void> => {
+  const { error } = await supabase.rpc("frenchie_buddy_delete_account");
+  if (error) throw new Error(error.message);
+  await signOut();
+};
 
-export const toProfileDTO = (profile: PupProfile, accountId: string): ProfileDTO => ({
-  id: profile.id,
-  user_id: accountId,
-  name: profile.name,
-  owner_name: profile.ownerName,
-  weight_lbs: profile.weightLbs,
-  birth_date: profile.birthDate,
-  has_breathing_notes: profile.hasBreathingNotes,
-  breathing_notes: profile.breathingNotes,
-  avatar_symbol: profile.avatarSymbol,
-  is_premium: profile.isPremium,
-  created_at: profile.createdAt,
-  updated_at: profile.updatedAt,
+// ── camelCase → snake_case payload mappers ──
+export const toProfilePayload = (p: PupProfile) => ({
+  name: p.name,
+  owner_name: p.ownerName,
+  weight_lbs: p.weightLbs,
+  birth_date: p.birthDate,
+  has_breathing_notes: p.hasBreathingNotes,
+  breathing_notes: p.breathingNotes,
+  avatar_symbol: p.avatarSymbol,
+  is_premium: p.isPremium,
 });
-
-export const toHealthDTO = (entry: HealthEntry, accountId: string): HealthEntryDTO => ({
-  id: entry.id,
-  user_id: accountId,
-  date: entry.date,
-  breathing_effort: entry.breathingEffort,
-  snoring_level: entry.snoringLevel,
-  sleep_hours: entry.sleepHours,
-  weight_lbs: entry.weightLbs,
-  activity: entry.activity,
-  note: entry.note,
+export const toHealthDTO = (e: HealthEntry) => ({
+  id: e.id, date: e.date, breathing_effort: e.breathingEffort, snoring_level: e.snoringLevel,
+  sleep_hours: e.sleepHours, weight_lbs: e.weightLbs, activity: e.activity, note: e.note,
 });
-
-export const toMemoryDTO = (entry: MemoryEntry, accountId: string): MemoryDTO => ({
-  id: entry.id,
-  user_id: accountId,
-  date: entry.date,
-  caption: entry.caption,
-  stage: entry.stage,
-  milestone: entry.milestone ?? null,
-  symbol: entry.symbol,
-  color_hex: entry.colorHex,
+export const toMemoryDTO = (e: MemoryEntry) => ({
+  id: e.id, date: e.date, caption: e.caption, stage: e.stage, milestone: e.milestone ?? null,
+  symbol: e.symbol, color_hex: e.colorHex,
 });
-
-export const toMedicationDTO = (entry: Medication, accountId: string): MedicationDTO => ({
-  id: entry.id,
-  user_id: accountId,
-  name: entry.name,
-  dosage: entry.dosage,
-  schedule: entry.schedule,
-  given_today: entry.givenToday,
-  due_time: entry.dueTime,
+export const toMedicationDTO = (e: Medication) => ({
+  id: e.id, name: e.name, dosage: e.dosage, schedule: e.schedule, given_today: e.givenToday, due_time: e.dueTime,
 });
-
-export const toMoodDTO = (entry: MoodScan, accountId: string): MoodScanDTO => ({
-  id: entry.id,
-  user_id: accountId,
-  date: entry.date,
-  mood_title: entry.moodTitle,
-  mood_emoji: entry.moodEmoji,
-  confidence: entry.confidence,
-  summary: entry.summary,
-  energy_tag: entry.energyTag,
-  note: entry.note,
+export const toMoodDTO = (e: MoodScan) => ({
+  id: e.id, date: e.date, mood_title: e.moodTitle, mood_emoji: e.moodEmoji, confidence: e.confidence,
+  summary: e.summary, energy_tag: e.energyTag, note: e.note,
 });
-
-export const toHeatDTO = (entry: HeatReading, accountId: string): HeatReadingDTO => ({
-  id: entry.id,
-  user_id: accountId,
-  date: entry.date,
-  temperature_f: entry.temperatureF,
-  humidity: entry.humidity,
-  level: entry.level,
-  condition_label: entry.conditionLabel,
+export const toHeatDTO = (e: HeatReading) => ({
+  id: e.id, date: e.date, temperature_f: e.temperatureF, humidity: e.humidity, level: e.level, condition_label: e.conditionLabel,
 });

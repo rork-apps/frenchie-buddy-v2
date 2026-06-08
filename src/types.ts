@@ -93,8 +93,8 @@ export type WalkTimer = {
 
 export type PupAccount = {
   accountId: string;
+  email: string;
   name: string;
-  passcode: string;
   ownerName: string;
 };
 

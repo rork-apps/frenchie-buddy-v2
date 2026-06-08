@@ -4,16 +4,21 @@ import {
   AccountPull,
   FrenchieState,
   HealthEntry,
-  HeatReading,
   LifeStage,
-  Medication,
-  MemoryEntry,
-  MoodScan,
   PupAccount,
   PupProfile,
   SafetyLevel,
 } from "../types";
-import { isNameTaken, pullPup, pushPup, registerPup, deletePup } from "../services/supabase";
+import {
+  signUpEmail,
+  signInEmail,
+  signOut as sbSignOut,
+  getSession,
+  pullSnapshot,
+  pushSnapshot,
+  deleteAccount as sbDeleteAccount,
+  type Session,
+} from "../services/supabase";
 import {
   configureRevenueCat,
   identifyUser,
@@ -50,123 +55,53 @@ export const evaluateHeat = (temperatureF: number, humidity: number) => {
   return { level, conditionLabel };
 };
 
-const profile: PupProfile = {
+// Empty profile defaults — the user fills these at onboarding. NO seeded sample dog.
+const emptyProfile: PupProfile = {
   id: makeId(),
-  name: "Mochi",
-  ownerName: "Heather",
-  weightLbs: 24.2,
-  birthDate: new Date(2021, 5, 14).toISOString(),
-  hasBreathingNotes: true,
-  breathingNotes: "Mild snoring at night. Avoid long walks above 78 F.",
+  name: "",
+  ownerName: "",
+  weightLbs: 0,
+  birthDate: now(),
+  hasBreathingNotes: false,
+  breathingNotes: "",
   avatarSymbol: "paw",
   isPremium: false,
-  subscriptionStatus: "trial",
-  onboardingCompleted: true,
+  subscriptionStatus: "free",
+  onboardingCompleted: false,
   createdAt: now(),
   updatedAt: now(),
 };
 
-const seedHeat = (): HeatReading[] => {
-  const reading = { temperatureF: 76, humidity: 58 };
-  return [
-    {
-      id: makeId(),
-      date: now(),
-      ...reading,
-      ...evaluateHeat(reading.temperatureF, reading.humidity),
-    },
-  ];
+// Static bundled content (the daily tip rotates through real, breed-accurate care
+// guidance — this is shipped content, NOT fabricated user data).
+const DAILY_TIPS = [
+  { starSign: "Today's care note", title: "Pavement check first", body: "Press the back of your hand to the sidewalk for 7 seconds. If it's too hot for you, it's too hot for your Frenchie's paws and breathing.", tip: "Walk in early morning or after sunset on warm days." },
+  { starSign: "Today's care note", title: "Short sniff, big win", body: "A slow 10-minute sniff route is more enriching — and far safer in the heat — than a long fast walk for a flat-faced breed.", tip: "Let the nose lead; cool down indoors right after." },
+  { starSign: "Today's care note", title: "Watch the breathing", body: "Loud, fast, or labored breathing after light activity is your cue to stop and cool down. Frenchies can't shed heat by panting as well as other breeds.", tip: "Offer water and shade at the first sign of effort." },
+] as const;
+
+const tipForToday = () => {
+  const day = Math.floor(Date.parse(now()) / 86400000) % DAILY_TIPS.length;
+  const pick = DAILY_TIPS[day];
+  return { id: makeId(), date: now(), starSign: pick.starSign, title: pick.title, body: pick.body, tip: pick.tip, saved: true };
 };
 
 export const createInitialState = (): FrenchieState => ({
-  profile,
-  healthEntries: [
-    {
-      id: makeId(),
-      date: new Date(Date.now() - 86400000).toISOString(),
-      breathingEffort: 0.32,
-      snoringLevel: 0.42,
-      sleepHours: 12.5,
-      weightLbs: 24.2,
-      activity: "Moderate",
-      note: "Easy breathing after a shaded morning walk.",
-    },
-    {
-      id: makeId(),
-      date: new Date(Date.now() - 86400000 * 3).toISOString(),
-      breathingEffort: 0.48,
-      snoringLevel: 0.56,
-      sleepHours: 11.8,
-      weightLbs: 24,
-      activity: "Low",
-      note: "Warm afternoon. Swapped walk for indoor games.",
-    },
-  ],
-  memories: [
-    {
-      id: makeId(),
-      date: new Date(Date.now() - 86400000 * 2).toISOString(),
-      caption: "First patio brunch of the season, parked under the fan.",
-      stage: "Adult",
-      milestone: "Calm outing",
-      symbol: "camera",
-      colorHex: 0xd8b0a6,
-    },
-    {
-      id: makeId(),
-      date: new Date(Date.now() - 86400000 * 12).toISOString(),
-      caption: "Graduated from the tiny harness to the sage walking set.",
-      stage: "Puppyhood",
-      milestone: "New gear",
-      symbol: "ribbon",
-      colorHex: 0x98bfa5,
-    },
-  ],
-  medications: [
-    {
-      id: makeId(),
-      name: "Joint support",
-      dosage: "1 chew",
-      schedule: "Morning with breakfast",
-      givenToday: true,
-      dueTime: new Date().toISOString(),
-    },
-  ],
-  moodScans: [
-    {
-      id: makeId(),
-      date: now(),
-      moodTitle: "Cozy supervisor",
-      moodEmoji: "Calm",
-      confidence: 0.91,
-      summary: "Relaxed posture, soft eyes, and low energy. Great day for calm enrichment.",
-      energyTag: "Low-key",
-      note: "Mock scan generated locally.",
-    },
-  ],
-  heatReadings: seedHeat(),
-  horoscope: {
-    id: makeId(),
-    date: now(),
-    starSign: "Gemini Frenchie",
-    title: "Snack diplomacy wins today",
-    body: "Mochi's charm is unusually persuasive. Keep training rewards tiny and frequent, then bank a quiet nap before the warmest part of the day.",
-    tip: "Check pavement with the back of your hand before any afternoon outing.",
-    saved: true,
-  },
+  profile: emptyProfile,
+  healthEntries: [],
+  memories: [],
+  medications: [],
+  moodScans: [],
+  heatReadings: [],
+  horoscope: tipForToday(),
   walkTimer: { active: false, seconds: 0 },
   account: null,
   syncStatus: "local",
-  syncMessage: "Local mode. Create an account to sync this pup across devices.",
+  syncMessage: "Create an account to sync your Frenchie across devices.",
   paywallSeen: false,
 });
 
-const mergeUnique = <T extends { id: string }>(local: T[], incoming: T[]) => {
-  const ids = new Set(local.map((item) => item.id));
-  return [...local, ...incoming.filter((item) => !ids.has(item.id))];
-};
-
-const fromPull = (pull: AccountPull, fallbackName: string, passcode: string): FrenchieState => {
+const fromPull = (pull: AccountPull, session: Session): FrenchieState => {
   const fallback = createInitialState();
   const pulledProfile = pull.profile;
   const nextProfile: PupProfile = pulledProfile
@@ -186,12 +121,12 @@ const fromPull = (pull: AccountPull, fallbackName: string, passcode: string): Fr
         createdAt: pulledProfile.created_at ?? now(),
         updatedAt: pulledProfile.updated_at ?? now(),
       }
-    : { ...fallback.profile, name: fallbackName, ownerName: pull.owner_name ?? "", userId: pull.account_id };
+    : { ...fallback.profile, name: "", ownerName: pull.owner_name ?? "", userId: session.userId, onboardingCompleted: true };
 
   const account: PupAccount = {
-    accountId: pull.account_id,
-    name: fallbackName,
-    passcode,
+    accountId: session.userId,
+    email: session.email,
+    name: nextProfile.name,
     ownerName: nextProfile.ownerName,
   };
 
@@ -265,29 +200,52 @@ export const useFrenchieStore = () => {
 
   useEffect(() => {
     let mounted = true;
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then(async (saved) => {
-        if (saved && mounted) {
-          const restored = JSON.parse(saved) as FrenchieState;
-          setState(restored);
-          // Initialize RevenueCat with stored account if available
-          await configureRevenueCat(restored.account?.accountId);
-          if (restored.account) {
-            await identifyUser(restored.account.accountId);
-            const isPremium = await checkPremium();
-            if (isPremium && mounted) {
-              setState((s) => ({
-                ...s,
-                profile: { ...s.profile, subscriptionStatus: "premium", isPremium: true },
-              }));
-            }
-          }
-        } else {
-          await configureRevenueCat();
+    (async () => {
+      try {
+        // 1. Restore cached state for instant (offline-friendly) first paint.
+        const saved = await AsyncStorage.getItem(STORAGE_KEY);
+        if (saved && mounted) setState(JSON.parse(saved) as FrenchieState);
+        // 2. Reconcile against the real Supabase Auth session.
+        const session = await getSession();
+        await configureRevenueCat(session?.userId);
+        if (!session) {
+          if (mounted) setState((s) => ({ ...s, account: null }));
+          return;
         }
-      })
-      .catch(() => undefined)
-      .finally(() => mounted && setReady(true));
+        await identifyUser(session.userId);
+        try {
+          const pulled = await pullSnapshot();
+          const remote = fromPull(pulled, session);
+          const isPremium = await checkPremium();
+          if (mounted)
+            setState((s) => ({
+              ...s,
+              account: remote.account,
+              profile: isPremium ? { ...remote.profile, subscriptionStatus: "premium", isPremium: true } : remote.profile,
+              healthEntries: remote.healthEntries,
+              memories: remote.memories,
+              medications: remote.medications,
+              moodScans: remote.moodScans,
+              heatReadings: remote.heatReadings,
+              syncStatus: "synced",
+              syncMessage: "Last synced just now.",
+            }));
+        } catch {
+          // Offline: keep cached data, but trust the session for the auth gate.
+          if (mounted)
+            setState((s) => ({
+              ...s,
+              account: s.account ?? { accountId: session.userId, email: session.email, name: s.profile.name, ownerName: s.profile.ownerName },
+              syncStatus: "failed",
+              syncMessage: "You're offline. Showing your last saved data.",
+            }));
+        }
+      } catch {
+        // ignore — fall through to ready
+      } finally {
+        if (mounted) setReady(true);
+      }
+    })();
     return () => {
       mounted = false;
     };
@@ -303,32 +261,30 @@ export const useFrenchieStore = () => {
 
   const sync = useCallback(async () => {
     const current = stateRef.current;
-    setState((value) => ({ ...value, syncStatus: "syncing", syncMessage: "Syncing Frenchie Buddy with the cloud..." }));
     if (!current.account) {
-      setState((value) => ({ ...value, syncStatus: "local", syncMessage: "Sign in to sync this pup." }));
+      setState((value) => ({ ...value, syncStatus: "local", syncMessage: "Create an account to sync your Frenchie." }));
       return;
     }
+    setState((value) => ({ ...value, syncStatus: "syncing", syncMessage: "Syncing with the cloud…" }));
     try {
-      await pushPup(
-        current.account.name,
-        current.account.passcode,
-        current.account.accountId,
+      // Push local state, then take the server's merged snapshot as the source of truth.
+      const pulled = await pushSnapshot(
         current.profile,
         current.healthEntries,
         current.memories,
         current.medications,
         current.moodScans,
-        current.heatReadings
+        current.heatReadings,
       );
-      const pulled = await pullPup(current.account.name, current.account.passcode);
-      const remote = fromPull(pulled, current.account.name, current.account.passcode);
+      const remote = fromPull(pulled, { userId: current.account.accountId, email: current.account.email });
       setState((value) => ({
         ...value,
-        healthEntries: mergeUnique(value.healthEntries, remote.healthEntries),
-        memories: mergeUnique(value.memories, remote.memories),
-        medications: mergeUnique(value.medications, remote.medications),
-        moodScans: mergeUnique(value.moodScans, remote.moodScans),
-        heatReadings: mergeUnique(value.heatReadings, remote.heatReadings),
+        profile: { ...remote.profile, subscriptionStatus: value.profile.subscriptionStatus, isPremium: value.profile.isPremium },
+        healthEntries: remote.healthEntries,
+        memories: remote.memories,
+        medications: remote.medications,
+        moodScans: remote.moodScans,
+        heatReadings: remote.heatReadings,
         syncStatus: "synced",
         syncMessage: "Last synced just now.",
       }));
@@ -392,25 +348,22 @@ export const useFrenchieStore = () => {
           ],
         }));
       },
-      scanMood(note: string) {
-        const moods = [
-          ["Zoomie diplomat", "Play", "High spark, playful face, and a strong case for five-minute games.", "Playful"],
-          ["Cozy supervisor", "Calm", "Relaxed posture and soft eyes. Keep the day gentle and predictable.", "Calm"],
-          ["Snack detective", "Focus", "Alert expression and bright focus. Training treats may be unusually persuasive.", "Curious"],
-        ] as const;
-        const pick = moods[Math.floor(Math.random() * moods.length)];
+      // Manual mood log — the OWNER records how their Frenchie seems today.
+      // No AI/photo analysis (constitution: no in-app AI). Real, user-entered data.
+      logMood(mood: { moodTitle: string; energyTag: string; summary: string; note: string }) {
+        if (!mood.moodTitle.trim()) return;
         patch((current) => ({
           ...current,
           moodScans: [
             {
               id: makeId(),
               date: now(),
-              moodTitle: pick[0],
-              moodEmoji: pick[1],
-              confidence: 0.88 + Math.random() * 0.08,
-              summary: pick[2],
-              energyTag: pick[3],
-              note: note.trim() || "Mock mood scan generated locally.",
+              moodTitle: mood.moodTitle,
+              moodEmoji: mood.energyTag,
+              confidence: 1,
+              summary: mood.summary,
+              energyTag: mood.energyTag,
+              note: mood.note.trim(),
             },
             ...current.moodScans,
           ],
@@ -461,47 +414,60 @@ export const useFrenchieStore = () => {
       async deleteAccount() {
         const current = stateRef.current;
         if (!current.account) throw new Error("No account to delete.");
-        await deletePup(current.account.name, current.account.passcode);
+        await sbDeleteAccount();
         await logOutRevenueCat();
         await AsyncStorage.removeItem(STORAGE_KEY);
         setState({
           ...createInitialState(),
           account: null,
           syncStatus: "local",
-          syncMessage: "Account deleted. All cloud data has been removed.",
+          syncMessage: "Account deleted. All your data has been removed.",
         });
       },
       async signOut() {
+        await sbSignOut();
         await logOutRevenueCat();
-        patch((current) => ({
+        await AsyncStorage.removeItem(STORAGE_KEY);
+        setState({
           ...createInitialState(),
           account: null,
           syncStatus: "local",
-          syncMessage: current.account ? "Signed out. Local sample data is ready for the next pup." : current.syncMessage,
-        }));
+          syncMessage: "Signed out.",
+        });
       },
-      async signUp(name: string, passcode: string, ownerName: string) {
-        if (!name.trim()) throw new Error("Please enter your Frenchie's name.");
-        if (passcode.length < 6) throw new Error("Please choose a passcode of at least 6 characters.");
-        const taken = await isNameTaken(name);
-        if (taken) throw new Error("That Frenchie name is already taken.");
-        const accountId = await registerPup(name, passcode, ownerName);
-        await identifyUser(accountId);
+      // signUp(email, password, pupName, ownerName) — real Supabase Auth.
+      async signUp(email: string, password: string, pupName: string, ownerName: string) {
+        if (!email.trim()) throw new Error("Please enter your email.");
+        if (password.length < 6) throw new Error("Password must be at least 6 characters.");
+        if (!pupName.trim()) throw new Error("Please enter your Frenchie's name.");
+        const session = await signUpEmail(email, password);
+        await identifyUser(session.userId);
+        const profile: PupProfile = {
+          ...createInitialState().profile,
+          name: pupName.trim(),
+          ownerName: ownerName.trim(),
+          userId: session.userId,
+          onboardingCompleted: true,
+          updatedAt: now(),
+        };
+        // Create the profile row on the server immediately.
+        await pushSnapshot(profile, [], [], [], [], []);
         setState((current) => ({
           ...current,
-          profile: { ...current.profile, name: name.trim(), ownerName: ownerName.trim(), userId: accountId, updatedAt: now() },
-          account: { accountId, name: name.trim(), passcode, ownerName: ownerName.trim() },
+          profile,
+          account: { accountId: session.userId, email: session.email, name: pupName.trim(), ownerName: ownerName.trim() },
           syncStatus: "synced",
-          syncMessage: "Account created. Syncing your local pup next.",
+          syncMessage: "Account created.",
         }));
       },
-      async signIn(name: string, passcode: string) {
-        if (!name.trim()) throw new Error("Please enter your Frenchie's name.");
-        if (passcode.length < 6) throw new Error("Please enter the account passcode (6+ characters).");
-        const pulled = await pullPup(name, passcode);
-        await identifyUser(pulled.account_id);
+      async signIn(email: string, password: string) {
+        if (!email.trim()) throw new Error("Please enter your email.");
+        if (!password) throw new Error("Please enter your password.");
+        const session = await signInEmail(email, password);
+        await identifyUser(session.userId);
+        const pulled = await pullSnapshot();
         const isPremium = await checkPremium();
-        const restored = fromPull(pulled, name.trim(), passcode);
+        const restored = fromPull(pulled, session);
         if (isPremium) {
           restored.profile.subscriptionStatus = "premium";
           restored.profile.isPremium = true;
