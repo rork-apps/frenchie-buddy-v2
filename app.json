@@ -32,10 +32,16 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "owner": "amorriss-team",
+    "owner": "app-publishing-academy",
     "plugins": [
       "expo-font",
-      "expo-secure-store"
-    ]
+      "expo-secure-store",
+      "expo-splash-screen"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1d4c24cb-cb89-4e4e-a71d-eec4b353be52"
+      }
+    }
   }
 }
