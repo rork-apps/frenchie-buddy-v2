@@ -205,9 +205,9 @@ const OnboardingScreen = ({ actions }: { actions: Store["actions"] }) => {
     } finally { setBusy(false); }
   };
 
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-      <ScrollView contentContainerStyle={{ paddingHorizontal: t.space.lg24, paddingTop: 80, paddingBottom: 48 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+  if (step === "welcome") {
+    return (
+      <View style={{ flex: 1, paddingHorizontal: t.space.lg24, justifyContent: "center" }}>
         <FadeIn>
           <View style={{ alignItems: "center", marginBottom: t.space.xl32 }}>
             <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: t.color.primarySubtle, alignItems: "center", justifyContent: "center", ...t.elevation.sm }}>
@@ -217,50 +217,45 @@ const OnboardingScreen = ({ actions }: { actions: Store["actions"] }) => {
             <Text style={{ fontFamily: t.font.body, fontSize: 16, color: t.color.textSecondary, textAlign: "center", marginTop: 6, maxWidth: 290 }}>The care companion built for flat-faced breeds.</Text>
           </View>
         </FadeIn>
-
-        {step === "welcome" && (
-          <>
-            {ONBOARDING_FEATURES.map((f, i) => (
-              <FadeIn key={f.title} delay={i * 70}>
-                <View style={{ flexDirection: "row", gap: t.space.base16, alignItems: "center", marginBottom: t.space.base16 }}>
-                  <View style={{ width: 48, height: 48, borderRadius: t.radius.md, backgroundColor: t.color.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: t.color.border }}>
-                    <Ionicons name={f.icon} size={22} color={t.color.primaryDeep} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontFamily: t.font.bodyBold, fontSize: 16, color: t.color.text }}>{f.title}</Text>
-                    <Text style={{ fontFamily: t.font.body, fontSize: 13, lineHeight: 18, color: t.color.textSecondary, marginTop: 2 }}>{f.desc}</Text>
-                  </View>
-                </View>
-              </FadeIn>
-            ))}
-            <View style={{ marginTop: t.space.base16 }}>
-              <ActionButton icon="paw-outline" label="Create an account" onPress={() => { setStep("signup"); setError(""); }} />
-              <ActionButton icon="log-in-outline" label="I already have an account" onPress={() => { setStep("signin"); setError(""); }} secondary />
+        {ONBOARDING_FEATURES.map((f, i) => (
+          <FadeIn key={f.title} delay={i * 70}>
+            <View style={{ flexDirection: "row", gap: t.space.base16, alignItems: "center", marginBottom: t.space.base16 }}>
+              <View style={{ width: 48, height: 48, borderRadius: t.radius.md, backgroundColor: t.color.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: t.color.border }}>
+                <Ionicons name={f.icon} size={22} color={t.color.primaryDeep} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: t.font.bodyBold, fontSize: 16, color: t.color.text }}>{f.title}</Text>
+                <Text style={{ fontFamily: t.font.body, fontSize: 13, lineHeight: 18, color: t.color.textSecondary, marginTop: 2 }}>{f.desc}</Text>
+              </View>
             </View>
-            <LegalRow />
-          </>
-        )}
+          </FadeIn>
+        ))}
+        <View style={{ marginTop: t.space.base16 }}>
+          <ActionButton icon="paw-outline" label="Create an account" onPress={() => { setStep("signup"); setError(""); }} />
+          <ActionButton icon="log-in-outline" label="I already have an account" onPress={() => { setStep("signin"); setError(""); }} secondary />
+        </View>
+        <LegalRow />
+      </View>
+    );
+  }
 
-        {step !== "welcome" && (
-          <>
-            <PressableScale onPress={() => { setStep("welcome"); setError(""); }} accessibilityLabel="Back" style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: t.space.lg24, alignSelf: "flex-start" }}>
-              <Ionicons name="arrow-back" size={22} color={t.color.primaryDeep} />
-              <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 15, color: t.color.primaryDeep }}>Back</Text>
-            </PressableScale>
-            <Text style={{ fontFamily: t.font.displayBold, fontSize: 24, color: t.color.text, marginBottom: 6 }}>{step === "signup" ? "Create your pup's profile" : "Welcome back"}</Text>
-            <Text style={{ fontFamily: t.font.body, fontSize: 15, lineHeight: 21, color: t.color.textSecondary, marginBottom: t.space.lg24 }}>
-              {step === "signup" ? "Create an account to safely sync your Frenchie across devices." : "Sign in to restore your Frenchie's data."}
-            </Text>
-            <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address" autoCorrect={false} />
-            <Field label="Password" value={password} onChangeText={setPassword} placeholder="6+ characters" secureTextEntry />
-            {step === "signup" && <Field label="Frenchie's name" value={pupName} onChangeText={setPupName} placeholder="Mochi" autoCapitalize="words" />}
-            {step === "signup" && <Field label="Your name (optional)" value={ownerName} onChangeText={setOwnerName} placeholder="Heather" autoCapitalize="words" />}
-            {error ? <Text style={{ fontFamily: t.font.body, fontSize: 13, color: t.color.dangerDeep, marginTop: 4 }}>{error}</Text> : null}
-            <ActionButton icon={step === "signup" ? "checkmark-circle-outline" : "log-in-outline"} label={busy ? "Working…" : step === "signup" ? "Create account" : "Sign in"} onPress={() => submit(step === "signup" ? "signup" : "signin")} disabled={busy} />
-            <LegalRow />
-          </>
-        )}
-      </ScrollView>
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1, paddingHorizontal: t.space.lg24, justifyContent: "center" }}>
+      <PressableScale onPress={() => { setStep("welcome"); setError(""); }} accessibilityLabel="Back" style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: t.space.lg24, alignSelf: "flex-start" }}>
+        <Ionicons name="arrow-back" size={22} color={t.color.primaryDeep} />
+        <Text style={{ fontFamily: t.font.bodySemibold, fontSize: 15, color: t.color.primaryDeep }}>Back</Text>
+      </PressableScale>
+      <Text style={{ fontFamily: t.font.displayBold, fontSize: 24, color: t.color.text, marginBottom: 6 }}>{step === "signup" ? "Create your pup's profile" : "Welcome back"}</Text>
+      <Text style={{ fontFamily: t.font.body, fontSize: 15, lineHeight: 21, color: t.color.textSecondary, marginBottom: t.space.lg24 }}>
+        {step === "signup" ? "Create an account to safely sync your Frenchie across devices." : "Sign in to restore your Frenchie's data."}
+      </Text>
+      <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address" autoCorrect={false} />
+      <Field label="Password" value={password} onChangeText={setPassword} placeholder="6+ characters" secureTextEntry />
+      {step === "signup" && <Field label="Frenchie's name" value={pupName} onChangeText={setPupName} placeholder="Mochi" autoCapitalize="words" />}
+      {step === "signup" && <Field label="Your name (optional)" value={ownerName} onChangeText={setOwnerName} placeholder="Heather" autoCapitalize="words" />}
+      {error ? <Text style={{ fontFamily: t.font.body, fontSize: 13, color: t.color.dangerDeep, marginTop: 4 }}>{error}</Text> : null}
+      <ActionButton icon={step === "signup" ? "checkmark-circle-outline" : "log-in-outline"} label={busy ? "Working…" : step === "signup" ? "Create account" : "Sign in"} onPress={() => submit(step === "signup" ? "signup" : "signin")} disabled={busy} />
+      <LegalRow />
     </KeyboardAvoidingView>
   );
 };
