@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>App Preview</title>
+<!--
+  Device-frame wrapper for an Expo web deployment.
+  Drop this file at the ROOT of the app's web `dist/` (so it's same-origin with the app),
+  then `eas deploy`. Open <deployment-url>/frame.html to see the app inside an iPhone.
+
+  Why same-origin: iframing the app's own origin ("./") avoids any X-Frame-Options issues.
+  Query params (all optional):
+    ?app=<url>     iframe a different deployment (must allow being iframed)
+    ?label=<text>  caption above the phone
+    ?w=<px>&h=<px> override the screen size (default iPhone 15/16: 393x852; iPad: 834x1194)
+-->
+<style>
+  :root{ --w:393px; --h:852px; --bezel:14px; --radius:58px; }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:radial-gradient(120% 120% at 50% 0%, #1a2030 0%, #0e1116 60%);
+    color:#e8eaed;
+    font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    min-height:100%;gap:16px;padding:24px;overflow:hidden;
+  }
+  .caption{opacity:.65;letter-spacing:.08em;text-transform:uppercase;font-size:11px;}
+  .stage{transform-origin:center center;}
+  .phone{
+    position:relative;
+    width:calc(var(--w) + var(--bezel)*2);
+    height:calc(var(--h) + var(--bezel)*2);
+    background:#000;border-radius:var(--radius);padding:var(--bezel);
+    box-shadow:0 30px 80px rgba(0,0,0,.55), 0 0 0 2px #23262e inset;
+  }
+  .island{
+    position:absolute;top:calc(var(--bezel) + 9px);left:50%;transform:translateX(-50%);
+    width:118px;height:30px;background:#000;border-radius:18px;z-index:2;pointer-events:none;
+  }
+  .screen{
+    width:var(--w);height:var(--h);border:0;
+    border-radius:calc(var(--radius) - var(--bezel));background:#fff;display:block;
+  }
+</style>
+</head>
+<body>
+  <div class="caption" id="cap">App preview</div>
+  <div class="stage" id="stage">
+    <div class="phone">
+      <div class="island"></div>
+      <iframe class="screen" id="frame" src="./" title="App preview"
+              allow="clipboard-read; clipboard-write; accelerometer; gyroscope"></iframe>
+    </div>
+  </div>
+<script>
+  var p = new URLSearchParams(location.search);
+  var root = document.documentElement.style;
+  if (p.get('w')) root.setProperty('--w', parseInt(p.get('w'),10)+'px');
+  if (p.get('h')) root.setProperty('--h', parseInt(p.get('h'),10)+'px');
+  if (p.get('app'))   document.getElementById('frame').src = p.get('app');
+  if (p.get('label')) document.getElementById('cap').textContent = p.get('label');
+  function fit(){
+    var stage = document.getElementById('stage');
+    stage.style.transform = 'scale(1)';
+    var r = stage.getBoundingClientRect();
+    var availH = window.innerHeight - 96, availW = window.innerWidth - 48;
+    var s = Math.min(availH / r.height, availW / r.width, 1);
+    stage.style.transform = 'scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+</script>
+</body>
+</html>

@@ -42,3 +42,6 @@ eas-inspect-*/
 # generated native folders
 /ios
 /android
+
+# Local Netlify folder
+.netlify

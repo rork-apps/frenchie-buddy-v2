@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>App Preview</title>
+<!--
+  Multi-device preview switcher for an Expo web deployment.
+  Drop at the app repo's public/preview.html → served at <deployment>/preview.html
+  iPhone / iPad / Mac buttons reframe the SAME live web app (same-origin iframe, fully interactive).
+  App renders BELOW a status-bar safe-area inset so the dynamic island / camera never covers content.
+
+  IMPORTANT: we DO NOT use CSS transform:scale to fit — a transformed iframe makes RN-Web measure the
+  SCALED size, so the app renders at the wrong width/height (blank/clipped/margined). Instead we scale
+  the actual pixel dimensions (no transform), so the embedded app measures the real frame size and fills it.
+
+  Query: ?app=<url>  ?device=iphone|ipad|mac  ?statusbg=<hex>  ?statusfg=<hex>  (dark apps: statusbg=000000 statusfg=ffffff)
+-->
+<style>
+  :root{ --w:393; --h:852; --bezel:14px; --radius:54px; --inset:52px; --tb:0px; --s:1; --sbfg:#0a0a0a; --sbbg:#ffffff; }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:radial-gradient(120% 120% at 50% -10%, #20283a 0%, #0c0f15 60%);
+    color:#e8eaed;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;flex-direction:column;align-items:center;height:100%;overflow:hidden;
+  }
+  .bar{display:flex;gap:6px;align-items:center;padding:14px;flex:0 0 auto;flex-wrap:wrap;justify-content:center;}
+  .seg{display:flex;background:#1b1f29;border:1px solid #2a2f3a;border-radius:12px;padding:4px;gap:2px;}
+  .seg button{appearance:none;border:0;background:transparent;color:#aab3c2;font:600 13px/1 inherit;padding:9px 18px;border-radius:9px;cursor:pointer;}
+  .seg button.active{background:#3b82f6;color:#fff;}
+  .seg button:hover:not(.active){background:#232834;color:#e8eaed;}
+  .meta{margin-left:10px;opacity:.5;font-size:12px;}
+  .wrap{flex:1 1 auto;display:flex;align-items:center;justify-content:center;width:100%;min-height:0;}
+
+  /* device shell — all dimensions are pre-scaled by JS (no transform) */
+  .device{position:relative;background:#000;
+    width:calc(var(--w)*1px + var(--bezel)*2);
+    height:calc(var(--h)*1px + var(--bezel)*2 + var(--tb));
+    border-radius:var(--radius);padding:var(--bezel);
+    box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 0 2px #23262e inset;}
+
+  .screen-area{position:relative;width:calc(var(--w)*1px);height:calc(var(--h)*1px);
+    border-radius:calc(var(--radius) - var(--bezel));overflow:hidden;background:var(--sbbg);}
+  .statusbar{position:absolute;top:0;left:0;right:0;height:var(--inset);z-index:3;
+    display:flex;align-items:center;justify-content:space-between;padding:0 calc(22px*var(--s));
+    color:var(--sbfg);font:600 calc(15px*var(--s))/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;pointer-events:none;}
+  .statusbar .right{display:flex;align-items:center;gap:calc(7px*var(--s));}
+  .sig{display:flex;align-items:flex-end;gap:calc(2px*var(--s));height:calc(11px*var(--s));}
+  .sig i{width:calc(3px*var(--s));background:var(--sbfg);border-radius:1px;}
+  .sig i:nth-child(1){height:calc(4px*var(--s))}.sig i:nth-child(2){height:calc(6px*var(--s))}.sig i:nth-child(3){height:calc(8px*var(--s))}.sig i:nth-child(4){height:calc(11px*var(--s))}
+  .batt{width:calc(24px*var(--s));height:calc(12px*var(--s));border:1.5px solid var(--sbfg);border-radius:calc(3px*var(--s));position:relative;}
+  .batt i{position:absolute;left:1.5px;top:1.5px;bottom:1.5px;width:78%;background:var(--sbfg);border-radius:1px;}
+  .batt:after{content:"";position:absolute;right:calc(-3px*var(--s));top:25%;height:50%;width:calc(2px*var(--s));background:var(--sbfg);border-radius:1px;}
+  .island{position:absolute;top:calc(9px*var(--s));left:50%;transform:translateX(-50%);width:calc(118px*var(--s));height:calc(32px*var(--s));background:#000;border-radius:calc(18px*var(--s));z-index:4;}
+  .cam{display:none;}
+  .screen{position:absolute;left:0;top:var(--inset);width:calc(var(--w)*1px);height:calc(var(--h)*1px - var(--inset));border:0;background:transparent;display:block;}
+
+  /* iPad: camera dot instead of island */
+  .device.ipad .island{display:none;}
+  .device.ipad .cam{display:block;position:absolute;top:calc(10px*var(--s));left:50%;transform:translateX(-50%);width:calc(8px*var(--s));height:calc(8px*var(--s));border-radius:50%;background:#1c1c1c;z-index:4;}
+
+  /* Mac: browser-window chrome (desktop web view) */
+  .titlebar{display:none;}
+  .device.mac{background:#1d1f23;box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 0 1px #2a2f3a;overflow:hidden;}
+  .device.mac .screen-area{border-radius:0;}
+  .device.mac .statusbar,.device.mac .island,.device.mac .cam{display:none;}
+  .device.mac .titlebar{display:flex;height:var(--tb);align-items:center;gap:calc(8px*var(--s));padding:0 calc(14px*var(--s));background:#2a2d33;border-bottom:1px solid #1a1c20;}
+  .dot{width:calc(12px*var(--s));height:calc(12px*var(--s));border-radius:50%;}
+  .dot.r{background:#ff5f57;}.dot.y{background:#febc2e;}.dot.g{background:#28c840;}
+  .urlpill{flex:1;margin:0 calc(10px*var(--s));height:calc(24px*var(--s));border-radius:calc(7px*var(--s));background:#1d1f23;color:#7e8794;font-size:calc(12px*var(--s));display:flex;align-items:center;justify-content:center;}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="seg" id="seg">
+      <button data-d="iphone" class="active">iPhone</button>
+      <button data-d="ipad">iPad</button>
+      <button data-d="mac">Mac</button>
+    </div>
+    <span class="meta" id="meta"></span>
+  </div>
+  <div class="wrap">
+    <div class="device iphone" id="device">
+      <div class="titlebar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="urlpill" id="pill"></span></div>
+      <div class="screen-area">
+        <div class="statusbar">
+          <span class="time">9:41</span>
+          <span class="right"><span class="sig"><i></i><i></i><i></i><i></i></span><span class="batt"><i></i></span></span>
+        </div>
+        <div class="island"></div>
+        <div class="cam"></div>
+        <iframe class="screen" id="frame" src="./" title="App preview" allow="clipboard-read; clipboard-write; accelerometer; gyroscope"></iframe>
+      </div>
+    </div>
+  </div>
+<script>
+  var R=document.documentElement.style;
+  var params=new URLSearchParams(location.search);
+  var frame=document.getElementById('frame');
+  if(params.get('app')) frame.src=params.get('app');
+  if(params.get('statusbg')) R.setProperty('--sbbg','#'+params.get('statusbg').replace('#',''));
+  if(params.get('statusfg')) R.setProperty('--sbfg','#'+params.get('statusfg').replace('#',''));
+
+  // RN-Web reads window dimensions to lay out; nudge a resize after (re)load so it re-measures the frame.
+  function nudgeFrame(){ try{ var w=frame.contentWindow; if(w) w.dispatchEvent(new Event('resize')); }catch(e){} }
+  frame.addEventListener('load', function(){ nudgeFrame(); setTimeout(nudgeFrame,300); setTimeout(nudgeFrame,900); });
+  var _n=0,_iv=setInterval(function(){ nudgeFrame(); if(++_n>8) clearInterval(_iv); },400);
+
+  var BASE={
+    iphone:{w:393,h:852,bezel:14,radius:54,inset:52,tb:0, label:"iPhone 15/16 · 393×852"},
+    ipad:  {w:834,h:1194,bezel:18,radius:30,inset:40,tb:0, label:"iPad Pro 11\" · 834×1194"},
+    mac:   {w:1280,h:800,bezel:0,radius:12,inset:0, tb:38, label:"Mac · desktop web · 1280×800"}
+  };
+  var cur='iphone';
+  var device=document.getElementById('device'), meta=document.getElementById('meta'), pill=document.getElementById('pill'), inited=false;
+
+  function fit(){
+    var b=BASE[cur];
+    var totalW=b.w+b.bezel*2, totalH=b.h+b.bezel*2+b.tb;
+    var barH=document.querySelector('.bar').getBoundingClientRect().height;
+    var s=Math.min((window.innerHeight-barH-20)/totalH,(window.innerWidth-20)/totalW,1)*0.98;
+    R.setProperty('--s',s);
+    R.setProperty('--w',b.w*s); R.setProperty('--h',b.h*s);
+    R.setProperty('--bezel',(b.bezel*s)+'px'); R.setProperty('--radius',(b.radius*s)+'px');
+    R.setProperty('--inset',(b.inset*s)+'px'); R.setProperty('--tb',(b.tb*s)+'px');
+    nudgeFrame();
+  }
+  function setDevice(d){
+    if(!BASE[d]) d='iphone';
+    cur=d; device.className='device '+d; meta.textContent=BASE[d].label; pill.textContent=location.host;
+    [].forEach.call(document.querySelectorAll('#seg button'),function(b){b.classList.toggle('active',b.dataset.d===d);});
+    fit();
+    if(inited){ frame.src=frame.src; }   // reload so the app re-measures at the new size
+    inited=true;
+  }
+  document.getElementById('seg').addEventListener('click',function(e){var b=e.target.closest('button'); if(b) setDevice(b.dataset.d);});
+  window.addEventListener('resize',fit);
+  setDevice(params.get('device')||'iphone');
+  window.addEventListener('load',fit);
+</script>
+</body>
+</html>
